@@ -1,0 +1,27 @@
+[project]
+name = "adaption-memory"
+version = "0.1.0"
+description = "Reproduction of Adaption Labs' write-time agent memory, with eval harnesses for LongMemEval, LoCoMo, and BEAM"
+requires-python = ">=3.13"
+dependencies = [
+    "openai>=1.60",
+    "pyarrow>=25.0.1",
+    "nltk>=3.9",
+    "regex>=2024.11",
+    "scipy>=1.14",
+    "json-repair>=0.30",
+    "tqdm>=4.66",
+]
+
+[project.scripts]
+eval = "adaption_memory.evals.run:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/adaption_memory"]

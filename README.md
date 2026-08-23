@@ -87,9 +87,49 @@ not from retrieval sophistication alone.
 
 ## Status
 
-Early. The article does not publish extraction prompts, field-level schemas,
-model names, or judging criteria, so those are reconstructed here rather than
-copied.
+The three eval harnesses are built and tested; the memory system itself is
+next. `--system full-history` reproduces the article's baseline column;
+`--system oracle` echoes gold answers to validate the scoring plumbing.
+
+## Running the evals
+
+Data (gitignored, ~300MB total):
+
+```
+mkdir -p data && cd data
+curl -LO https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json
+curl -LO https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
+curl -L  https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json -o locomo10.json
+curl -L  https://huggingface.co/datasets/Mohammadta/BEAM/resolve/main/data/100K-00000-of-00001.parquet -o beam_100k.parquet
+```
+
+Run (answering model defaults to Ollama at `localhost:11434`, judge is any
+OpenAI-compatible endpoint):
+
+```
+uv run eval locomo      --system full-history --model qwen3:8b
+uv run eval longmemeval --system full-history --judge-model gpt-5.6-luna
+uv run eval beam        --system full-history --judge-model gpt-5.6-luna
+```
+
+Stages are resumable (`--stage answer|judge|report|all`); results land in
+`results/<bench>/<system>/`. Offline tests: `uv run pytest`.
+
+### Scoring fidelity
+
+Each harness reproduces its official scorer:
+
+- **LongMemEval** — the verbatim judge prompts from `evaluate_qa.py`
+  (per-type templates, abstention via `_abs`, label = "yes" in judge output).
+- **LoCoMo** — the lexical metrics from `task_eval/evaluation.py`: stemmed
+  token F1 (categories 2/3/4, category 3 takes the first `;`-field of gold),
+  multi-answer partial F1 (category 1), abstention substring check (category 5).
+  No judge model involved.
+- **BEAM** — the official rubric scheme: every rubric item judged 0/0.5/1 with
+  the verbatim unified judge prompt, averaged; `event_ordering` reported as
+  normalized Kendall's tau over LLM-aligned event lists. One deliberate fix:
+  we substitute the `<question>` placeholder the official runner leaves
+  unreplaced.
 
 ## License
 
