@@ -1478,3 +1478,44 @@
 **Blockers**
 
 - None.
+
+### 2026-08-25 - llama-server migration measured and rejected
+
+**Status:** complete
+
+**Completed**
+
+- Attempted the planned local-inference optimization: llama.cpp llama-server
+  with prompt-prefix caching and speculative decoding, serving the existing
+  Ollama GGUF blobs with a pinned non-thinking chat template.
+- Measured a controlled A/B on the same fastloop slice and rejected the
+  migration: prefix caching works but is dwarfed by slower
+  grammar-constrained decoding, and speculative decoding either crashes
+  (draft model) or gains nothing (ngram).
+- Reverted the endpoint wiring; Ollama remains the canonical local endpoint.
+  Recorded full numbers in `results/FAILURES.md`.
+
+**Evidence**
+
+- Ollama 98.9s vs llama-server 118.6s vs llama-server+flash-attn 108.4s on
+  the identical one-conversation LoCoMo fastloop; store_recall identical
+  (0.0), rejections 7 vs 7 vs 14.
+- Per-call decomposition from server timings: prefill 2-4s at 410-590 tok/s
+  with the 410-token static prefix reused; decode ~360 tokens at ~28 ms/token
+  under json_schema grammar.
+- 64 tests pass after revert; Ollama endpoint healthy.
+
+**Decisions**
+
+- Do not change serving stacks for speed on this machine: decode token count
+  dominates, so future latency work targets output size (record shaping) or
+  a smaller model (qwen3:1.7b), both gated by fastloop recall.
+
+**Next**
+
+- Read the fastloop rejection log and decide the recall fix (prompt-only
+  constraints vs caps), which remains the open question.
+
+**Blockers**
+
+- None.
