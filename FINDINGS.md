@@ -167,12 +167,53 @@ are fully independent. Exploiting that:
   across every config measured, zero questions were stored-but-not-
   retrieved. The entire battle is extraction.
 
-## 6. Open items
+## 6. The beat-full-history campaign (2026-08-25, evening)
 
-- Gate passed at teacher tier: simple + coverage-f1 is the canonical
-  extraction interface for Luna-extracted runs (dev +9.3, holdout +10.6).
-  Canonical defaults for the local arm flip only after the Qwen signal
-  confirmation, which resumes from the banked extraction checkpoints.
+Goal: memory > full-conversation-history on the 90-question signal set,
+teacher tier, mean-of-3 passes everywhere (a 3.5-point single-run noise
+band was measured first; single runs are screens only).
+
+Accepted levers (all mechanical; every prompt-persuasion lever failed):
+
+| Config (means of 3) | Dev | Holdout |
+|---|---:|---:|
+| Full-history baseline | 0.5802 | 0.7241 |
+| Session start (simple + coverage) | 0.5605 | 0.4926 |
+| + coverage-f1-v2 (verbatim values) | 0.5834 | — |
+| + chrono rendering | 0.6006 | 0.4945 |
+| + supersession labels (chrono-v2) | 0.6123 | 0.4945 |
+| **+ cue-gated adaptive-k (champion)** | **0.6315** | **0.5130** |
+
+Rejected: blanket k=20 (-7 dev), type-aware prompt (inconclusive),
+chrono-v3 relative-date resolution (LoCoMo up, everything else down),
+multi-query retrieval (dev-flat, holdout -5.8 — paraphrase union displaces
+relevant records with paraphrase-shaped noise).
+
+**Verdict: split.** Dev is won outright — +5.1 mean, and the champion's
+worst draw beats the baseline's best. Holdout is lost decisively: its
+composition (aggregation, multi-hop composition, vocabulary-mismatch
+lookups, LoCoMo holdout conversations) is long-context's home turf —
+the baseline scores 0.861/0.778 on holdout LongMemEval/LoCoMo. Overall:
+memory ~0.587 vs baseline ~0.635.
+
+Durable lessons: (1) models need better inputs, not more instructions —
+every accepted lever changed what reached the model, every rejected one
+told it what to do; (2) dev/holdout difficulty asymmetry on a 90-question
+slice is large enough to invert conclusions — the split discipline caught
+what would have been a false "we beat full history" claim from dev alone;
+(3) answer-stage stochasticity (default temperature, effort none) puts a
+~3.5-point noise band on every single run.
+
+## 7. Open items
+
+- Canonical teacher config after the campaign: coverage-f1-v2 prompt,
+  simple emission, chrono-v2 answering, cue-gated adaptive-k.
+- Remaining holdout gap classes need write-side or architecture-adjacent
+  work: complete-list extraction, verbatim-phrase retention, cross-session
+  composition (consolidation/summary records would need their own gate
+  under the reproduction invariant).
+- The 90-question signal slice is the current arbiter; the full benchmarks
+  remain unrun and could reorder these conclusions in either direction.
 - Exact-value retention is the remaining weak spot everywhere: specific
   strings like "Mindful.org" and "6:45 AM" are the facts that die even
   under the best configs. Next prompt iteration targets those.
