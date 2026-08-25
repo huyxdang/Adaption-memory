@@ -1,0 +1,262 @@
+<title>Agent memory fails at the interface, not the model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --paper:#F7F9F8; --card:#FFFFFF; --ink:#1A2422; --ink-2:#4E5A56; --ink-3:#7A8681;
+  --accent:#0F6E56; --accent-soft:#E1F5EE; --ctrl:#888780; --ctrl-soft:#EFEEE9;
+  --grid:#DCE2DF; --line:#C9D1CD; --danger:#993C1D; --code-bg:#EEF2F0;
+}
+:root:not([data-theme="light"]){}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#151A18; --card:#1D2422; --ink:#E8ECEA; --ink-2:#A9B4AF; --ink-3:#7A8681;
+    --accent:#5DCAA5; --accent-soft:#0B3A2E; --ctrl:#B4B2A9; --ctrl-soft:#2A2E2C;
+    --grid:#313A36; --line:#3D4743; --danger:#F0997B; --code-bg:#232B28;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#151A18; --card:#1D2422; --ink:#E8ECEA; --ink-2:#A9B4AF; --ink-3:#7A8681;
+  --accent:#5DCAA5; --accent-soft:#0B3A2E; --ctrl:#B4B2A9; --ctrl-soft:#2A2E2C;
+  --grid:#313A36; --line:#3D4743; --danger:#F0997B; --code-bg:#232B28;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:"Source Sans 3",-apple-system,"Segoe UI",sans-serif;
+  font-size:17px;line-height:1.65}
+main{max-width:720px;margin:0 auto;padding:0 20px 96px}
+header{padding:72px 0 8px}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+h1{font-family:Newsreader,Georgia,serif;font-weight:600;font-size:clamp(34px,6vw,50px);
+  line-height:1.08;margin:14px 0 10px;text-wrap:balance}
+.standfirst{font-family:Newsreader,Georgia,serif;font-size:21px;line-height:1.45;color:var(--ink-2);margin:0 0 6px}
+.byline{font-size:14px;color:var(--ink-3);margin:14px 0 0}
+h2{font-family:Newsreader,Georgia,serif;font-weight:600;font-size:28px;line-height:1.2;
+  margin:52px 0 12px;text-wrap:balance}
+p{margin:0 0 18px;max-width:66ch}
+a{color:var(--accent)}
+strong{font-weight:600}
+figure{margin:28px 0 34px;background:var(--card);border:1px solid var(--grid);
+  border-radius:10px;padding:22px 20px 14px;overflow-x:auto}
+figcaption{font-size:13.5px;color:var(--ink-2);margin-top:10px;line-height:1.5;max-width:none}
+svg{display:block;width:100%;height:auto}
+svg text{font-family:"Source Sans 3",sans-serif;font-variant-numeric:tabular-nums}
+.lbl{font-size:12.5px;fill:var(--ink-2)}
+.val{font-size:12.5px;font-weight:600;fill:var(--ink)}
+.axl{font-size:11.5px;fill:var(--ink-3)}
+code,pre{font-family:"JetBrains Mono",ui-monospace,monospace}
+code{font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{background:var(--code-bg);border:1px solid var(--grid);border-radius:8px;
+  padding:14px 16px;font-size:13px;line-height:1.55;overflow-x:auto;margin:0}
+.codepair{display:grid;grid-template-columns:1fr;gap:12px;margin:26px 0 32px}
+@media(min-width:660px){.codepair{grid-template-columns:1fr 1fr}}
+.codepair .tag{font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  margin:0 0 6px;color:var(--ink-3)}
+.codepair .new .tag{color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:15px;margin:24px 0 30px;font-variant-numeric:tabular-nums}
+th{text-align:left;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;border-bottom:2px solid var(--line);padding:6px 12px 8px}
+td{border-bottom:1px solid var(--grid);padding:9px 12px}
+td.n,th.n{text-align:right}
+.win td{background:var(--accent-soft)}
+ul{padding-left:22px;margin:0 0 18px}
+li{margin-bottom:10px;max-width:64ch}
+hr{border:0;border-top:1px solid var(--line);margin:56px 0}
+.footnote{font-size:14.5px;color:var(--ink-2)}
+@media (prefers-reduced-motion: no-preference){
+  figure:hover rect.mark{opacity:.92}
+}
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">Reproduction notes</div>
+  <h1>Agent memory fails at the interface, not the model</h1>
+  <p class="standfirst">Notes from reproducing a write-time memory architecture — and the week the JSON schema turned out to be the bottleneck.</p>
+  <p class="byline">Huy X. Dang · August 2026</p>
+</header>
+
+<p>We set out to reproduce the architecture from <a href="https://adaptionlabs.ai/blog/agent-memory-write-time">“Better Agent Memory Starts Before Retrieval”</a>: an LLM extractor that writes two kinds of memory records at conversation time — narrative records that preserve reasoning, atomic records that preserve exact facts — into an append-only store where updates supersede rather than overwrite. The thesis of that article is that the highest-leverage optimization happens at write time, when information is extracted into memory, not later when it is searched for.</p>
+<p>The thesis survived our attempt to reproduce it — in a way we didn’t expect. The write path was the bottleneck, but the biggest lever inside it wasn’t the extraction model, the retrieval stack, or the prompt alone. It was the interface: the shape of the JSON we forced the extractor to emit.</p>
+
+<h2>Retrieval lost nothing. Extraction lost almost everything.</h2>
+<p>Our first end-to-end runs were bad, and the failure analysis was unambiguous: of 28 bucketed failures on our evaluation slice, 22 were facts that never got extracted. When we later instrumented the store directly, the retrieval number went to zero — across every configuration we measured, no fact that made it into the store failed to surface when its question came.</p>
+
+<figure>
+<svg viewBox="0 0 680 210" role="img" aria-label="Pipeline diagram: 22 failures at extraction, 3 at retrieval, 3 at answering">
+<g font-family="inherit">
+<rect x="20" y="30" width="140" height="52" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="90" y="52" text-anchor="middle" class="val">Extract</text>
+<text x="90" y="70" text-anchor="middle" class="axl">LLM writes memory</text>
+<rect x="186" y="30" width="140" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+<text x="256" y="52" text-anchor="middle" class="val">Store</text>
+<text x="256" y="70" text-anchor="middle" class="axl">append-only</text>
+<rect x="352" y="30" width="140" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+<text x="422" y="52" text-anchor="middle" class="val">Retrieve</text>
+<text x="422" y="70" text-anchor="middle" class="axl">top-k records</text>
+<rect x="518" y="30" width="140" height="52" rx="8" fill="var(--card)" stroke="var(--line)"/>
+<text x="588" y="52" text-anchor="middle" class="val">Answer</text>
+<text x="588" y="70" text-anchor="middle" class="axl">LLM + records</text>
+<line x1="160" y1="56" x2="186" y2="56" stroke="var(--ink-3)" stroke-width="1.5"/>
+<line x1="326" y1="56" x2="352" y2="56" stroke="var(--ink-3)" stroke-width="1.5"/>
+<line x1="492" y1="56" x2="518" y2="56" stroke="var(--ink-3)" stroke-width="1.5"/>
+<text x="90" y="122" text-anchor="middle" font-size="30" font-weight="600" fill="var(--danger)">22</text>
+<text x="90" y="142" text-anchor="middle" class="axl">failures here</text>
+<text x="422" y="122" text-anchor="middle" font-size="30" font-weight="600" fill="var(--ink-3)">3</text>
+<text x="422" y="142" text-anchor="middle" class="axl">failures</text>
+<text x="588" y="122" text-anchor="middle" font-size="30" font-weight="600" fill="var(--ink-3)">3</text>
+<text x="588" y="142" text-anchor="middle" class="axl">failures</text>
+<text x="20" y="188" class="axl">Failure buckets from the 28 wrong answers in the first signal-tier run.</text>
+</g>
+</svg>
+<figcaption>Where answers die. Almost every failure traces to a fact that was never written into memory; the read path barely contributes.</figcaption>
+</figure>
+
+<p>So we built the tightest loop we could around that one stage: run extraction only, then check whether each benchmark question’s answer exists in the store — no answering model, no judge, about 100 seconds per iteration on a laptop. Most of what follows was found with that loop and confirmed at scale afterward.</p>
+
+<h2>The model was not the bottleneck</h2>
+<p>The obvious suspect was our small local extractor (Qwen3-4B). So we ran the same pipeline with a frontier model, then with an even stronger one. The two frontier tiers produced <em>identical</em> miss sets — capability saturated — and both still left roughly half the needed facts out of the store. When the strongest model you can buy misses half the facts, the problem is what you asked for, not who you asked.</p>
+
+<h2>What we were asking for was hostile</h2>
+<p>Our original extraction contract required, per memory: a type, the content, a list of entity names, and — for updates — the exact ID of the superseded record, copied out of a JSON blob of candidates. Small models botched the transcription constantly: invented IDs, the string <code>"null"</code>, mangled copies. Every botch cost the whole record to validation — about 50 good facts rejected per run. The prompt compounded it: <em>be concise, don’t repeat, output an empty list when nothing durable is new.</em> The model obeyed, and saved little.</p>
+<p>We changed two things. The contract shrank to two fields plus an optional numbered pointer, with our own code resolving the pointer, deriving entities, stamping dates, and embedding the text. And the prompt flipped from precision to coverage: <em>preserve every explicit fact likely to support a later question; emit separate records for independent facts.</em></p>
+
+<div class="codepair">
+<div><p class="tag">Before — five things to get right</p>
+<pre>{"type": "atomic",
+ "content": "Huy has 4 dogs.",
+ "entities": ["Huy"],
+ "supersedes_id":
+   "rec_8f3ab2"}</pre></div>
+<div class="new"><p class="tag">After — two, plus a number</p>
+<pre>{"type": "atomic",
+ "content": "Huy has 4 dogs.",
+ "updates": 2}</pre></div>
+</div>
+
+<figure>
+<svg viewBox="0 0 680 240" role="img" aria-label="Dumbbell chart: judged store recall, old versus new interface, for Qwen3-4B and GPT-5.6">
+<line x1="150" y1="60" x2="630" y2="60" stroke="var(--grid)"/>
+<line x1="150" y1="130" x2="630" y2="130" stroke="var(--grid)"/>
+<text x="150" y="200" class="axl">0.0</text><text x="390" y="200" text-anchor="middle" class="axl">0.4</text><text x="630" y="200" text-anchor="end" class="axl">0.8</text>
+<line x1="150" y1="182" x2="150" y2="186" stroke="var(--line)"/>
+<line x1="390" y1="182" x2="390" y2="186" stroke="var(--line)"/>
+<line x1="630" y1="182" x2="630" y2="186" stroke="var(--line)"/>
+<text x="20" y="65" class="lbl">Qwen3-4B</text>
+<line x1="300" y1="60" x2="342" y2="60" stroke="var(--line)" stroke-width="2"/>
+<circle cx="300" cy="60" r="7" fill="var(--ctrl)"/>
+<circle cx="342" cy="60" r="7" fill="var(--accent)"/>
+<text x="288" y="45" text-anchor="end" class="val">0.25</text>
+<text x="354" y="45" class="val" fill="var(--accent)">0.32</text>
+<text x="20" y="135" class="lbl">GPT-5.6</text>
+<line x1="486" y1="130" x2="533" y2="130" stroke="var(--line)" stroke-width="2"/>
+<circle cx="486" cy="130" r="7" fill="var(--ctrl)"/>
+<circle cx="533" cy="130" r="7" fill="var(--accent)"/>
+<text x="474" y="115" text-anchor="end" class="val">0.56</text>
+<text x="545" y="115" class="val" fill="var(--accent)">0.64</text>
+<circle cx="158" cy="226" r="6" fill="var(--ctrl)"/><text x="170" y="230" class="axl">old interface</text>
+<circle cx="280" cy="226" r="6" fill="var(--accent)"/><text x="292" y="230" class="axl">new interface (2-field contract + coverage prompt)</text>
+</svg>
+<figcaption>Judged store recall — does the memory store contain what each benchmark question needs. The frontier model gained as much as the small one: the old interface was capping everyone. Validation rejections fell from ~50 per run to ~2.</figcaption>
+</figure>
+
+<h2>Gate it like you mean it</h2>
+<p>Cheap loops overfit. Earlier in this project, a single-record-type ablation “beat” the canonical two-type design by 2.2 points on our dev split and briefly got promoted — a difference of one net answer across 56 questions. We reverted it and wrote a rule: architecture-level changes need at least +3 points of macro judge accuracy on the dev split, confirmed on a holdout split the change has never seen.</p>
+<p>The new interface went through that gate on the full pipeline — extract, store, retrieve, answer, judge:</p>
+
+<figure>
+<svg viewBox="0 0 680 250" role="img" aria-label="Grouped bar chart: gate results on dev and holdout splits, old versus new interface">
+<line x1="60" y1="196" x2="640" y2="196" stroke="var(--line)"/>
+<line x1="60" y1="196" x2="640" y2="196" stroke="var(--line)"/>
+<line x1="60" y1="52" x2="640" y2="52" stroke="var(--grid)" stroke-dasharray="4 4"/>
+<text x="60" y="44" class="axl">0.6</text>
+<line x1="60" y1="76" x2="640" y2="76" stroke="var(--grid)" stroke-dasharray="4 4"/>
+<text x="60" y="70" class="axl">0.5</text>
+<text x="60" y="192" class="axl">0.0</text>
+<rect class="mark" x="140" y="79.4" width="56" height="116.6" rx="4" fill="var(--ctrl)"><title>Old interface, dev: 0.485</title></rect>
+<rect class="mark" x="204" y="56.4" width="56" height="139.6" rx="4" fill="var(--accent)"><title>New interface, dev: 0.578</title></rect>
+<rect class="mark" x="420" y="82.6" width="56" height="113.4" rx="4" fill="var(--ctrl)"><title>Old interface, holdout: 0.472</title></rect>
+<rect class="mark" x="484" y="56.4" width="56" height="139.6" rx="4" fill="var(--accent)"><title>New interface, holdout: 0.578</title></rect>
+<text x="168" y="72" text-anchor="middle" class="val">0.485</text>
+<text x="232" y="49" text-anchor="middle" class="val" fill="var(--accent)">0.578</text>
+<text x="448" y="75" text-anchor="middle" class="val">0.472</text>
+<text x="512" y="49" text-anchor="middle" class="val" fill="var(--accent)">0.578</text>
+<text x="200" y="218" text-anchor="middle" class="lbl">Dev split · 56 questions</text>
+<text x="480" y="218" text-anchor="middle" class="lbl">Holdout · 34 unseen questions</text>
+<circle cx="148" cy="240" r="6" fill="var(--ctrl)"/><text x="160" y="244" class="axl">old interface</text>
+<circle cx="280" cy="240" r="6" fill="var(--accent)"/><text x="292" y="244" class="axl">new interface</text>
+</svg>
+<figcaption>End-to-end macro judge accuracy. +9.3 points on dev, +10.6 on holdout, zero generalization drop — three times the promotion threshold that the earlier false positive couldn’t clear.</figcaption>
+</figure>
+
+<h2>Formats change what models bother to do</h2>
+<p>The best finding of the week came from a variant that lost. Mid-redesign, an appealing idea surfaced: drop the numbered pointer too, and let the model express an update by <em>restating the fact it replaces</em> — <code>{"content": "Huy has 4 dogs.", "replaces": "Huy has 5 dogs."}</code> — with the harness matching the restated text back to a stored record. More natural for a language model; self-documenting in the logs. On the fast loop it looked like the winner.</p>
+<p>At full-pipeline scale it scored <em>below the old interface</em>. The post-mortem was not what we expected. The text matching was fine — 37 of 45 emitted links resolved correctly. The problem was that there were only 45 links.</p>
+
+<figure>
+<svg viewBox="0 0 680 220" role="img" aria-label="Bar chart: update links emitted, numbered pointer versus restated text, at identical record volume">
+<line x1="60" y1="166" x2="640" y2="166" stroke="var(--line)"/>
+<rect class="mark" x="150" y="46" width="130" height="120" rx="4" fill="var(--accent)"><title>Numbered pointer: 85 links from 3,742 records</title></rect>
+<rect class="mark" x="410" y="111" width="130" height="55" rx="4" fill="var(--ctrl)"><title>Restated text: 39 links from 3,740 records</title></rect>
+<text x="215" y="38" text-anchor="middle" class="val" fill="var(--accent)">85 links</text>
+<text x="475" y="103" text-anchor="middle" class="val">39 links</text>
+<text x="215" y="188" text-anchor="middle" class="lbl">“updates”: 2</text>
+<text x="475" y="188" text-anchor="middle" class="lbl">“replaces”: “Huy has 5 dogs.”</text>
+<text x="215" y="206" text-anchor="middle" class="axl">3,742 records written</text>
+<text x="475" y="206" text-anchor="middle" class="axl">3,740 records written</text>
+</svg>
+<figcaption>Same prompt, same model, same record volume — less than half the update links when linking costs a sentence instead of a number.</figcaption>
+</figure>
+
+<p>Restating a sentence is work, and it carries an implicit accuracy bar — so when unsure, the model wrote <code>null</code>. An unlinked update never demotes its stale predecessor, so every question about a changed fact became a coin flip between the old and new value. A three-character link gets used; an expensive link gets skipped. Emission formats don’t just bound what a model <em>can</em> express — they set the price of each behavior, and models economize.</p>
+
+<h2>Never modify, only append</h2>
+<p>None of the interface work touched the storage semantics, which are the article’s core design and worth seeing concretely. A fact that changes twice is three ordinary rows; each new row names its predecessor, and no row is ever edited:</p>
+
+<figure>
+<svg viewBox="0 0 680 232" role="img" aria-label="Supersession chain: three stored rows, each new row pointing back at the one it replaces">
+<g>
+<rect x="60" y="24" width="400" height="44" rx="8" fill="var(--card)" stroke="var(--line)"/>
+<text x="80" y="51" class="lbl" style="font-family:'JetBrains Mono',monospace">rec_a11 · “Huy has 6 dogs.” · Jan 5</text>
+<rect x="60" y="88" width="400" height="44" rx="8" fill="var(--card)" stroke="var(--line)"/>
+<text x="80" y="115" class="lbl" style="font-family:'JetBrains Mono',monospace">rec_b22 · “Huy has 5 dogs.” · Mar 14</text>
+<rect x="60" y="152" width="400" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="80" y="179" class="val" style="font-family:'JetBrains Mono',monospace">rec_c33 · “Huy has 4 dogs.” · Jul 2</text>
+<path d="M 490 110 C 530 110 530 46 494 46" fill="none" stroke="var(--ink-3)" stroke-width="1.5"/>
+<path d="M 494 46 l 9 -4 m -9 4 l 9 5" fill="none" stroke="var(--ink-3)" stroke-width="1.5"/>
+<text x="540" y="84" class="axl">supersedes</text>
+<path d="M 490 174 C 530 174 530 110 494 110" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+<path d="M 494 110 l 9 -4 m -9 4 l 9 5" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="540" y="148" class="axl">supersedes</text>
+<text x="60" y="224" class="axl">Retrieval demotes any row another row points at; the head of the chain answers “now”, the tail still answers “back then”.</text>
+</g>
+</svg>
+<figcaption>Append-only supersession. The update links are what the interface experiments were fighting to make models actually emit.</figcaption>
+</figure>
+
+<h2>What didn’t work, so you don’t have to</h2>
+<ul>
+<li><strong>Plain-text output (no JSON).</strong> Without a grammar constraint the model rambles; the parser ate its own template echoes. Recall: zero.</li>
+<li><strong>Letting the model think first.</strong> Thinking mode plus JSON-schema enforcement returned empty responses on our local stack.</li>
+<li><strong>A smaller extractor (1.7B).</strong> Perfect JSON, no judgment — recall collapsed to a third of the 4B model’s.</li>
+<li><strong>Extracting per message instead of per session.</strong> Same recall, 14× the calls.</li>
+<li><strong>A faster serving stack.</strong> Prefix caching and speculative decoding on llama.cpp measured <em>slower</em> end-to-end than the boring baseline — local extraction latency is decode token count, and nothing else.</li>
+<li><strong>Trusting one metric.</strong> Strict substring recall scored a store containing “tattoos of her dogs” as a failure against gold “tattoos of her four dogs”. We now run a cheap coverage score in the loop, an LLM judge as arbiter — and, after the restating episode, a link-rate counter, because neither of the first two can see supersession behavior.</li>
+</ul>
+
+<h2>Where the reproduction actually stands</h2>
+<p>Honesty section. The article’s headline result is that memory <em>beats</em> sending the full conversation history — 90.6% vs 60.6% on LongMemEval — with 97% fewer tokens. We are not there:</p>
+
+<table>
+<tr><th></th><th class="n">LongMemEval</th><th class="n">LoCoMo</th><th class="n">BEAM</th><th class="n">Macro</th></tr>
+<tr><td>Full conversation history</td><td class="n">0.733</td><td class="n">0.633</td><td class="n">0.500</td><td class="n">0.622</td></tr>
+<tr class="win"><td>Memory, best configuration</td><td class="n">0.667</td><td class="n">0.667</td><td class="n">0.400</td><td class="n">0.578</td></tr>
+</table>
+
+<p>On our 90-question signal subsample, memory wins one benchmark of three and trails the other two; our token reduction is real but smaller than claimed (~40%, not 97%). We have not yet run the full benchmarks, and our local-model distillation story is unfinished.</p>
+<p>What we can confirm from our own data: the write path is where the leverage lives, exactly as the article argues — we moved end-to-end accuracy nine points without touching retrieval or answering. The remaining gap is concentrated in exact-value retention (specific times, URLs, dates that die during extraction), and that is a write-time problem too.</p>
+<p>The architecture reproduces. The numbers, so far, don’t — and the distance between those two sentences is where we’re working next.</p>
+
+<hr>
+<p class="footnote">Everything here is reproducible from the repo: the fast extraction loop, the gated comparisons, per-run checkpoints, and a findings file that includes the negative results. Evaluation slices are stratified subsamples of LongMemEval, LoCoMo, and BEAM; “judged” metrics use an LLM judge over stores or answers as noted.</p>
+</main>
