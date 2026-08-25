@@ -155,8 +155,11 @@ notebooks. Complete and verify the F1 end-to-end path before adding F2–F4:
   invalid records locally. Never regenerate a complete extraction because one
   record failed deterministic validation. The local Qwen path bounds
   structured output to six concise records and 512 completion tokens per
-  session. This is a recorded inference contract, so local iteration cannot
-  silently regress to verbose generations.
+  session, uses a compact `r/t/c/e/s` transport, limits candidate context to
+  six compact `i/t/c/d` rows, and deterministically salvages complete records
+  before a token-truncated tail. This is a versioned, recorded inference
+  contract, so local iteration cannot silently regress to verbose generations
+  or mix incompatible checkpoints.
 - `retrieve.py` — hybrid: dense (any small local embedding model, e.g.
   Qwen3-embedding or bge-small via the same local endpoint; cache embeddings)
   + BM25 (rank_bm25), reciprocal-rank fusion. Post-processing: multiply

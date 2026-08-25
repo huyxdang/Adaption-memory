@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,7 +9,8 @@ from adaption_memory.interface import Session, Turn
 from adaption_memory.llm import Usage
 from adaption_memory.memory.answer import MemoryAnswerer
 from adaption_memory.memory.budget import BudgetExceeded, SpendTracker
-from adaption_memory.memory.extract import (LOCAL_MAX_RECORDS,
+from adaption_memory.memory.extract import (LOCAL_INFERENCE_REVISION,
+                                             LOCAL_MAX_RECORDS,
                                              LOCAL_MAX_TOKENS,
                                              MemoryExtractor)
 from adaption_memory.memory.judge import MemoryJudge
@@ -135,7 +137,9 @@ def test_local_extractor_has_bounded_output(tmp_path):
     )
     records = compact_schema["json_schema"]["schema"]["properties"]["r"]
     assert extractor.max_tokens == LOCAL_MAX_TOKENS
+    assert LOCAL_INFERENCE_REVISION == "compact-v2"
     assert records["maxItems"] == LOCAL_MAX_RECORDS
+    assert records["items"]["properties"]["e"]["maxItems"] == 3
     store.close()
 
 
@@ -147,6 +151,27 @@ def test_semantically_invalid_records_are_dropped_without_model_retry(tmp_path):
         {"t": "a", "c": "Noor chose 99 teas.",
          "e": ["Noor"], "s": None},
     ]})
+    llm = FakeTrackedLLM("qwen3:4b", response)
+    extractor = MemoryExtractor(
+        llm, store, FakeEmbedder(), tmp_path / "extractions.jsonl",
+        fewshot=False,
+    )
+    result = extractor.extract(
+        Session("s1", "2026-01-01", [Turn("user", "Noor chose tea.")])
+    )
+    assert llm.chat_calls == 1
+    assert [record.content for record in result.records] == ["Noor chose tea."]
+    assert len(result.rejected) == 1
+    assert result.repaired is False
+    store.close()
+
+
+def test_truncated_compact_tail_preserves_complete_records_without_retry(tmp_path):
+    store = MemoryStore(tmp_path / "store.sqlite3")
+    response = (
+        '{"r":[{"t":"n","c":"Noor chose tea.","e":["Noor"],"s":null},'
+        '{"t":"n","c":"unfinished tail'
+    )
     llm = FakeTrackedLLM("qwen3:4b", response)
     extractor = MemoryExtractor(
         llm, store, FakeEmbedder(), tmp_path / "extractions.jsonl",
@@ -281,3 +306,71 @@ def test_validated_prompt_excludes_metadata_dates_and_derived_values():
     assert "Never copy, reformat, or mention that metadata date" in prompt
     assert "Never calculate or infer durations" in prompt
     assert "non-empty string" in prompt
+
+
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[1] / "data" / "mini" / "smoke"
+         / "locomo.json").exists(),
+    reason="smoke tier data not generated",
+)
+def test_fastloop_runs_offline_and_resumes_from_checkpoints(tmp_path, monkeypatch):
+    from adaption_memory import overnight
+    from adaption_memory.memory import system as memory_system
+
+    extraction = json.dumps({"records": [{
+        "type": "narrative",
+        "content": "The speakers discussed their plans.",
+        "entities": ["speakers"],
+        "supersedes_id": None,
+    }]})
+    made = []
+
+    def fake_make_llm(model, **kwargs):
+        llm = FakeTrackedLLM(model, extraction)
+        made.append(llm)
+        return llm
+
+    monkeypatch.setattr(overnight, "make_llm", fake_make_llm)
+    monkeypatch.setattr(memory_system, "LocalEmbedder", FakeEmbedder)
+    monkeypatch.setattr(overnight, "RESULTS", tmp_path)
+    tracker = SpendTracker(tmp_path / "spend.json", cap_usd=40.0)
+
+    first = overnight.run_fastloop(
+        arm="luna-target", tracker=tracker,
+        benchmarks=("locomo",), limit=1,
+    )
+    locomo_summary = first["benchmarks"]["locomo"]
+    assert locomo_summary["questions"] > 0
+    assert locomo_summary["store_recall"] is not None
+    first_calls = sum(llm.chat_calls for llm in made)
+    assert first_calls > 0
+
+    run_dir = tmp_path / "fastloop" / "luna-target" / Path(first["run_dir"]).name
+    assert (run_dir / "locomo" / "summary.json").exists()
+    assert (run_dir / "locomo" / "misses.jsonl").exists()
+
+    made.clear()
+    second = overnight.run_fastloop(
+        arm="luna-target", tracker=tracker,
+        benchmarks=("locomo",), limit=1,
+    )
+    assert sum(llm.chat_calls for llm in made) == 0
+    assert second["benchmarks"]["locomo"]["store_recall"] == \
+        locomo_summary["store_recall"]
+
+
+def test_fastloop_never_answers():
+    from adaption_memory.overnight import _NoAnswerLLM
+    with pytest.raises(RuntimeError):
+        _NoAnswerLLM().chat([{"role": "user", "content": "hi"}])
+
+
+def test_fastloop_config_hash_tracks_prompt_content(monkeypatch):
+    from adaption_memory import overnight
+    base = overnight.fastloop_config_hash("luna-target", "F1", "base")
+    assert base == overnight.fastloop_config_hash("luna-target", "F1", "base")
+    assert base != overnight.fastloop_config_hash("qwen3-4b-zeroshot", "F1", "base")
+    assert base != overnight.fastloop_config_hash("luna-target", "F4", "base")
+    monkeypatch.setattr(overnight, "production_prompt",
+                        lambda *args, **kwargs: "edited prompt")
+    assert base != overnight.fastloop_config_hash("luna-target", "F1", "base")

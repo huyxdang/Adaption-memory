@@ -121,7 +121,8 @@ def extraction_schema(format_name: str = "F1",
         record_properties = {
             "t": {"type": "string", "enum": type_codes},
             "c": content,
-            "e": {"type": "array", "items": {"type": "string"}},
+            "e": {"type": "array", "items": {"type": "string"},
+                  "maxItems": 3},
             "s": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         }
         required = ["t", "c", "e", "s"]

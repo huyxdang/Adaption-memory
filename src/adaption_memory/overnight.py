@@ -20,10 +20,15 @@ from adaption_memory.evals import beam, locomo, longmemeval
 from adaption_memory.evals.common import (add_usage, append_jsonl, read_jsonl,
                                           usage_delta)
 from adaption_memory.interface import Session
-from adaption_memory.llm import LLM
+from adaption_memory.llm import LLM, Usage
 from adaption_memory.memory.budget import BudgetExceeded, SpendTracker
-from adaption_memory.memory.extract import LOCAL_MAX_RECORDS, LOCAL_MAX_TOKENS
+from adaption_memory.memory.extract import (LOCAL_INFERENCE_REVISION,
+                                             LOCAL_MAX_RECORDS,
+                                             LOCAL_MAX_TOKENS,
+                                             LOCAL_OUTPUT_INSTRUCTION)
+from adaption_memory.memory.checkpoint import stable_hash
 from adaption_memory.memory.judge import MemoryJudge
+from adaption_memory.memory.prompts import fewshot_messages, production_prompt
 from adaption_memory.memory.report import build_report
 from adaption_memory.memory.sft import build_sft
 from adaption_memory.memory.system import WriteTimeMemorySystem
@@ -299,6 +304,10 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
     overall = {"tier": tier, "arm": arm, "format": format_name,
                "split": split_name, "prompt_revision": prompt_revision,
                "inference": {
+                   "revision": (
+                       LOCAL_INFERENCE_REVISION
+                       if arm_config["model"].startswith("qwen3") else "canonical"
+                   ),
                    "extractor_max_tokens": (
                        LOCAL_MAX_TOKENS
                        if arm_config["model"].startswith("qwen3") else 1400
@@ -590,6 +599,192 @@ def rescore_baselines(tracker: SpendTracker) -> dict:
     return output
 
 
+class _NoAnswerLLM:
+    """Fails closed: the fast loop must never reach the answering model.
+
+    Declares the canonical answerer identity so MemoryAnswerer's
+    construction-time check passes, but any actual call raises."""
+
+    model = "gpt-5.6-luna"
+    reasoning_effort = "none"
+
+    def __init__(self):
+        self.usage = Usage()
+
+    def chat(self, *args, **kwargs):
+        raise RuntimeError(
+            "fastloop is extraction/retrieval only; answering is disabled"
+        )
+
+
+def fastloop_config_hash(arm: str, format_name: str,
+                         prompt_revision: str) -> str:
+    """Fingerprint everything that shapes extractor output, so an edited
+    prompt or few-shot file lands in a fresh directory with fresh stores."""
+    arm_config = ARMS[arm]
+    local = arm_config["model"].startswith("qwen3")
+    system_prompt = production_prompt(format_name, prompt_revision)
+    if local:
+        system_prompt = "/no_think\n" + system_prompt + LOCAL_OUTPUT_INSTRUCTION
+    return stable_hash({
+        "schema": 1,
+        "arm": arm,
+        "model": arm_config["model"],
+        "structured_output": arm_config["structured_output"],
+        "format": format_name,
+        "prompt_revision": prompt_revision,
+        "fewshot": arm_config["fewshot"],
+        "system": system_prompt,
+        "fewshot_messages": (fewshot_messages(format_name, compact=local)
+                             if arm_config["fewshot"] else []),
+        "local_bounds": ([LOCAL_INFERENCE_REVISION, LOCAL_MAX_RECORDS,
+                          LOCAL_MAX_TOKENS] if local else None),
+    })[:12]
+
+
+def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
+                 prompt_revision: str = "base",
+                 benchmarks: tuple[str, ...] = BENCHMARKS,
+                 limit: int | None = None) -> dict:
+    """Extraction-recall inner loop on the smoke tier.
+
+    Runs write-time extraction plus local retrieval only — no answering and
+    no judging, so a qwen-arm iteration costs zero hosted tokens. Scores the
+    store and the retrieved top-k against each question's reference with the
+    same strict recall proxy the signal runs report, and writes the concrete
+    misses (which fact, which bucket) for prompt iteration. Reruns with an
+    unchanged config resume from checkpoints and are near-instant; any change
+    to the prompts lands in a fresh config-hashed directory.
+    """
+    if arm not in ARMS:
+        raise ValueError(f"unknown arm: {arm}")
+    arm_config = ARMS[arm]
+    config_hash = fastloop_config_hash(arm, format_name, prompt_revision)
+    run_root = (RESULTS / "fastloop" / arm
+                / f"{format_name}-{prompt_revision}-{config_hash}")
+    started = time.perf_counter()
+    overall = {"tier": "smoke", "arm": arm, "format": format_name,
+               "prompt_revision": prompt_revision, "config_hash": config_hash,
+               "run_dir": (str(run_root.relative_to(ROOT))
+                           if run_root.is_relative_to(ROOT)
+                           else str(run_root)),
+               "benchmarks": {}}
+    for benchmark in benchmarks:
+        benchmark_dir = run_root / benchmark
+        benchmark_dir.mkdir(parents=True, exist_ok=True)
+        conversations = load_conversations("smoke", benchmark)
+        if limit is not None:
+            conversations = conversations[:limit]
+        rows, misses, extraction_results = [], [], []
+        usage: dict = {}
+        for conversation in conversations:
+            extractor_llm = make_llm(
+                arm_config["model"], base_url=arm_config["base_url"],
+                tracker=tracker, max_tokens=1400,
+                structured_output=arm_config["structured_output"],
+            )
+            system = WriteTimeMemorySystem(
+                extractor_llm=extractor_llm, answer_llm=_NoAnswerLLM(),
+                store_path=(benchmark_dir / "stores"
+                            / f"{safe_name(conversation.id)}.sqlite3"),
+                checkpoint_dir=benchmark_dir,
+                arm=arm, fewshot=arm_config["fewshot"],
+                format_name=format_name, prompt_revision=prompt_revision,
+            )
+            before_ingest = system.usage()
+            for session in conversation.sessions:
+                system.ingest(session)
+            usage = add_usage(usage, usage_delta(before_ingest, system.usage()))
+            extraction_results.extend(system.extractions)
+            memory_text = "\n".join(
+                record.content for record in system.store.all()
+            )
+            for question in conversation.questions:
+                stored = recall_proxy(
+                    question.reference, question.category, memory_text
+                )
+                retrieved_items = system.retriever.retrieve(question.text)
+                system.last_retrieved = retrieved_items
+                retrieved_text = "\n".join(
+                    item.record.content for item in retrieved_items
+                )
+                retrieved = recall_proxy(
+                    question.reference, question.category, retrieved_text
+                )
+                rows.append({
+                    "stored": stored,
+                    "retrieved": retrieved,
+                    "supersession": supersession_rank_ok(
+                        system, question.category
+                    ),
+                })
+                if stored is False or (stored and retrieved is False):
+                    misses.append({
+                        "question_id": question.id,
+                        "conversation_id": conversation.id,
+                        "category": question.category,
+                        "bucket": ("fact_not_extracted" if stored is False
+                                   else "stored_not_retrieved"),
+                        "question": question.text,
+                        "reference": question.reference,
+                        "retrieved_ids": [item.record.id
+                                          for item in retrieved_items],
+                    })
+            system.close()
+
+        stored_values = [row["stored"] for row in rows
+                         if row["stored"] is not None]
+        retrieved_values = [row["retrieved"] for row in rows
+                            if row["retrieved"] is not None]
+        supersession_values = [row["supersession"] for row in rows
+                               if row["supersession"] is not None]
+        summary = {
+            "benchmark": benchmark,
+            "conversations": len(conversations),
+            "questions": len(rows),
+            "store_recall": (round(sum(stored_values) / len(stored_values), 4)
+                             if stored_values else None),
+            "retrieved_recall": (
+                round(sum(retrieved_values) / len(retrieved_values), 4)
+                if retrieved_values else None
+            ),
+            "supersession_accuracy": (
+                round(sum(supersession_values) / len(supersession_values), 4)
+                if supersession_values else None
+            ),
+            "schema_validity": (
+                round(sum(result.schema_valid for result in extraction_results)
+                      / len(extraction_results), 4)
+                if extraction_results else 1.0
+            ),
+            "rejected_records": sum(len(result.rejected)
+                                    for result in extraction_results),
+            "misses": {
+                "fact_not_extracted": sum(
+                    miss["bucket"] == "fact_not_extracted" for miss in misses
+                ),
+                "stored_not_retrieved": sum(
+                    miss["bucket"] == "stored_not_retrieved" for miss in misses
+                ),
+            },
+            "extractor_usage": usage,
+        }
+        (benchmark_dir / "misses.jsonl").write_text(
+            "".join(json.dumps(miss, ensure_ascii=False) + "\n"
+                    for miss in misses),
+            encoding="utf-8",
+        )
+        (benchmark_dir / "summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+        )
+        overall["benchmarks"][benchmark] = summary
+    overall["wall_seconds"] = round(time.perf_counter() - started, 1)
+    (run_root / "summary.json").write_text(
+        json.dumps(overall, indent=2) + "\n", encoding="utf-8"
+    )
+    return overall
+
+
 def main() -> None:
     load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -603,6 +798,18 @@ def main() -> None:
     run_parser.add_argument("--extractor-prompt", default="base",
                             choices=["base", "coverage", "validated"])
     run_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
+    fast_parser = subparsers.add_parser(
+        "fastloop",
+        help="extraction-recall inner loop on smoke; no answer/judge calls",
+    )
+    fast_parser.add_argument("--arm", required=True, choices=sorted(ARMS))
+    fast_parser.add_argument("--format", default="F1",
+                             choices=["F1", "F2", "F3", "F4"])
+    fast_parser.add_argument("--extractor-prompt", default="base",
+                             choices=["base", "coverage", "validated"])
+    fast_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
+    fast_parser.add_argument("--limit", type=int, default=None,
+                             help="cap conversations per benchmark")
     subparsers.add_parser("rescore-baselines")
     sft_parser = subparsers.add_parser("build-sft")
     sft_parser.add_argument("--format", default="F1",
@@ -621,6 +828,13 @@ def main() -> None:
                 format_name=args.format, split_name=args.split,
                 prompt_revision=args.extractor_prompt,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
+            )
+        elif args.command == "fastloop":
+            output = run_fastloop(
+                arm=args.arm, tracker=tracker, format_name=args.format,
+                prompt_revision=args.extractor_prompt,
+                benchmarks=tuple(args.benchmark or BENCHMARKS),
+                limit=args.limit,
             )
         elif args.command == "rescore-baselines":
             output = rescore_baselines(tracker)

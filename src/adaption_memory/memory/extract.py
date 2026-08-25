@@ -28,13 +28,17 @@ NUMBER_OR_DATE_TOKEN = regex.compile(
 
 LOCAL_MAX_RECORDS = 6
 LOCAL_MAX_TOKENS = 512
+LOCAL_INFERENCE_REVISION = "compact-v2"
 LOCAL_OUTPUT_INSTRUCTION = f"""
 Local inference constraints:
 - Use the compact transport {{"r":[{{"t":type_code,"c":content,
   "e":[entities],"s":supersedes_id}}]}}. Type codes are n=narrative,
   a=atomic, and m=memory; use only the codes allowed by the response schema.
+- Candidate rows use i=id, t=type, c=content, and d=created_at. Use a shown i
+  value as s only when the current session genuinely updates that memory.
 - Return at most {LOCAL_MAX_RECORDS} highest-value new records.
 - Keep each content field under 40 words.
+- Return at most three explicit entity names per record.
 - Return compact one-line JSON without indentation.
 - Never copy a long list or passage; preserve only its durable conclusion.
 - Never emit a date, number, or time by itself; attach it to the fact it qualifies.
@@ -75,7 +79,7 @@ class MemoryExtractor:
             f"{turn.role}: {turn.content}" for turn in session.turns
         )
         session_fingerprint = stable_hash({
-            "schema": 2,
+            "schema": 3 if self.local_qwen else 2,
             "scope": str(self.store.path.resolve()),
             "arm": self.arm,
             "model": self.llm.model,
@@ -107,8 +111,18 @@ class MemoryExtractor:
                 repaired=completed.get("repaired", False),
                 input_text=completed.get("input", ""),
             )
-        candidates = self.store.candidates(transcript, k=10)
-        candidate_rows = [record.as_dict() for record in candidates]
+        candidate_limit = 6 if self.local_qwen else 10
+        candidates = self.store.candidates(transcript, k=candidate_limit)
+        if self.local_qwen:
+            type_codes = {"narrative": "n", "atomic": "a", "memory": "m"}
+            candidate_rows = [{
+                "i": record.id,
+                "t": type_codes[record.type],
+                "c": record.content,
+                "d": record.created_at,
+            } for record in candidates]
+        else:
+            candidate_rows = [record.as_dict() for record in candidates]
         user_input = (
             "Candidate memories:\n"
             f"{json.dumps(candidate_rows, ensure_ascii=False)}\n\n"
@@ -120,7 +134,7 @@ class MemoryExtractor:
         if self.local_qwen:
             system_prompt = "/no_think\n" + system_prompt + LOCAL_OUTPUT_INSTRUCTION
         input_hash = stable_hash({
-            "schema": 2,
+            "schema": 3 if self.local_qwen else 2,
             "arm": self.arm,
             "model": self.llm.model,
             "format": self.format_name,
@@ -227,6 +241,9 @@ class MemoryExtractor:
             "format": self.format_name,
             "prompt_revision": self.prompt_revision,
             "inference": {
+                "revision": (
+                    LOCAL_INFERENCE_REVISION if self.local_qwen else "canonical"
+                ),
                 "max_tokens": self.max_tokens,
                 "max_records": self.max_records,
                 "repair_policy": "malformed-top-level-only",
@@ -324,15 +341,25 @@ class MemoryExtractor:
             if not isinstance(value, dict) or not isinstance(value.get("r"), list):
                 return {}, {"reason": "compact object must contain r array"}
             type_names = {"n": "narrative", "a": "atomic", "m": "memory"}
-            try:
-                value = {"records": [{
-                    "type": type_names[item["t"]],
+            records = []
+            required = {"t", "c", "e", "s"}
+            for item in value["r"]:
+                if not isinstance(item, dict) or not required <= item.keys():
+                    # json_repair can recover every complete item before a
+                    # token-truncated tail. Preserve those siblings and send
+                    # only the incomplete tail through normal validation.
+                    records.append({
+                        "type": None, "content": None, "entities": None,
+                        "supersedes_id": "__incomplete_compact_record__",
+                    })
+                    continue
+                records.append({
+                    "type": type_names.get(item["t"]),
                     "content": item["c"],
                     "entities": item["e"],
                     "supersedes_id": item["s"],
-                } for item in value["r"]]}
-            except (KeyError, TypeError):
-                return {}, {"reason": "invalid compact extraction fields"}
+                })
+            value = {"records": records}
         if not isinstance(value, dict) or "records" not in value:
             return {}, {"reason": "top-level object must contain records"}
         return value, None

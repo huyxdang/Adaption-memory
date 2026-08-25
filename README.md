@@ -366,6 +366,30 @@ confidence-bounded official-score estimate. Inspect `data/mini/manifest.json`
 for the tier index and each tier's manifest for exact selected IDs, category
 distance, source/retained context sizes, support records, and distractors.
 
+### Fast extraction loop
+
+Your own error analysis says most failures are facts never extracted, so the
+inner loop scores extraction directly and skips answering and judging
+entirely — a qwen-arm iteration costs zero hosted tokens:
+
+```bash
+uv run overnight-memory fastloop --arm qwen3-4b-zeroshot --benchmark locomo --limit 1
+```
+
+It ingests smoke-tier conversations through the write path, then checks each
+question's reference against (a) the whole store and (b) the retrieved top-k,
+using the same strict recall proxy the signal runs report. Results land in
+`results/fastloop/<arm>/<format>-<prompt>-<hash>/`: a `summary.json` with
+`store_recall` / `retrieved_recall` / supersession / rejected counts, and a
+`misses.jsonl` listing each missed fact with its bucket
+(`fact_not_extracted` vs `stored_not_retrieved`) — the concrete list to
+iterate the extractor prompt against.
+
+The directory hash covers the resolved prompt, few-shot messages, and local
+inference bounds: edit any of them and the next run starts clean in a new
+directory; rerun unchanged and checkpoints make it near-instant. Promote a
+prompt to a signal run only after it wins here.
+
 ### Scoring fidelity
 
 Each harness reproduces its official scorer:

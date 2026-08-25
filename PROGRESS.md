@@ -1396,3 +1396,85 @@
 **Blockers**
 
 - None.
+
+### 2026-08-25 - Local compact-v2 inference path validated
+
+**Status:** in progress
+
+**Completed**
+
+- Replaced verbose local JSON field names with the compact `r/t/c/e/s`
+  transport and normalized it to canonical records at the extractor boundary.
+- Reduced local candidate context from ten full records to six compact
+  `i/t/c/d` rows and bounded entities to three names per record.
+- Added deterministic partial-tail salvage: every complete record before a
+  token-truncated final item is validated and preserved without another model
+  call.
+- Versioned the local contract as `compact-v2`; its checkpoints cannot collide
+  with previous Qwen outputs. Quarantined both prior local attempts under
+  explicitly excluded result names.
+
+**Evidence**
+
+- Exact first LoCoMo signal session: 52.8 seconds before versus 10.2 seconds
+  after the bounded compact path, a 5.2x speedup.
+- Exact difficult smoke session 7: 37.6 seconds, two calls, zero records before
+  tail salvage versus 15.8 seconds, one call, six valid records after compact
+  candidates and tail salvage.
+- Focused memory suite: 17 tests pass, including compact bounds, local drop and
+  log, usage replay, and truncated-tail preservation.
+
+**Next**
+
+- Run the clean optimized smoke extraction suite, compare quality, then resume
+  signal only if the smoke gate passes.
+
+**Blockers**
+
+- Hosted Luna answer/judge requests currently reset during TLS setup; this does
+  not affect local Qwen extraction profiling or checkpoints.
+
+## Task: Lock the reproduction goal and build the extraction fast loop
+
+**Status:** in progress
+**Started:** 2026-08-25
+
+### Scope
+
+- Prevent a repeat of the F4 drift: record the F1-canonical invariant and a
+  minimum-effect decision rule where every session loads it.
+- Tighten the iteration loop: score write-time extraction directly, without
+  answering or judging.
+
+### 2026-08-25 - Invariant recorded and fastloop implemented
+
+**Status:** in progress
+
+**Completed**
+
+- Added a "Reproduction invariant" section to `CLAUDE.md`: F1
+  (narrative + atomic + supersession) is canonical; single-type formats are
+  ablations that must never be promoted; architecture changes require >=3
+  macro points on signal-dev confirmed on holdout.
+- Added `overnight-memory fastloop`: smoke-tier extraction plus local
+  retrieval only, guarded by a fail-closed answering stub so no hosted
+  answer or judge call is possible. Reports store recall, retrieved recall,
+  supersession, rejections, and writes per-question `misses.jsonl` bucketed
+  as `fact_not_extracted` vs `stored_not_retrieved`.
+- Run directories are hashed over the resolved prompt, few-shot messages,
+  and local inference bounds, so prompt edits start clean and unchanged
+  reruns resume from checkpoints.
+
+**Evidence**
+
+- 64 tests pass, including fastloop offline run, checkpoint resume with zero
+  model calls, config-hash sensitivity, and the fail-closed answer stub.
+
+**Next**
+
+- Measure a live qwen3-4b-zeroshot fastloop iteration on one LoCoMo smoke
+  conversation and record the wall time.
+
+**Blockers**
+
+- None.
