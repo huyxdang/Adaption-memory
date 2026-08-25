@@ -1,7 +1,10 @@
 """Shared runner plumbing: resumable JSONL answer files and summaries."""
 
 import json
+import threading
 from pathlib import Path
+
+_APPEND_LOCK = threading.Lock()
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -11,8 +14,10 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def append_jsonl(path: Path, record: dict) -> None:
+    """Append one JSONL row; safe for concurrent conversation workers
+    sharing a checkpoint file within one process."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
+    with _APPEND_LOCK, open(path, "a") as f:
         f.write(json.dumps(record) + "\n")
 
 

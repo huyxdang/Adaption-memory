@@ -314,6 +314,7 @@ def supersession_rank_ok(system: WriteTimeMemorySystem, category: str) -> bool |
 def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             format_name: str = "F1", split_name: str | None = None,
             prompt_revision: str = "base", emission: str = "pointer",
+            workers: int = 3,
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
@@ -359,95 +360,125 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
                              "bm25_weight": bm25_weight,
                              "demotion_factor": demotion_factor},
                "benchmarks": {}}
-    for benchmark in benchmarks:
+    def process_conversation(benchmark: str, conversation,
+                             questions: list) -> dict:
+        """Extract, answer, and judge one conversation with worker-local
+        model clients. Sessions stay strictly sequential inside the
+        conversation; conversations run concurrently on the shared pool."""
         benchmark_dir = run_root / benchmark
-        benchmark_dir.mkdir(parents=True, exist_ok=True)
-        answers_path = benchmark_dir / "answers.jsonl"
-        judged_path = benchmark_dir / "judged.jsonl"
-        answer_rows = {row["question_id"]: row for row in read_jsonl(answers_path)}
-        judged_rows = {row["question_id"]: row for row in read_jsonl(judged_path)}
-        selected = selected_question_ids(tier, benchmark, split_name)
-        extraction_results = []
-
+        extractor_llm = make_llm(
+            arm_config["model"], base_url=arm_config["base_url"],
+            tracker=tracker, max_tokens=1400,
+            structured_output=arm_config["structured_output"],
+        )
+        answer_llm = make_llm("gpt-5.6-luna", base_url=None,
+                              tracker=tracker, max_tokens=1200)
         judge_llm = make_llm("gpt-5.6-luna", base_url=None,
                              tracker=tracker, max_tokens=250)
         judge = MemoryJudge(judge_llm, benchmark_dir / "judge_calls.jsonl")
-        for conversation in load_conversations(tier, benchmark):
-            questions = [question for question in conversation.questions
-                         if selected is None or question.id in selected]
-            if not questions:
-                continue
-            extractor_llm = make_llm(
-                arm_config["model"], base_url=arm_config["base_url"],
-                tracker=tracker, max_tokens=1400,
-                structured_output=arm_config["structured_output"],
-            )
-            answer_llm = make_llm("gpt-5.6-luna", base_url=None,
-                                  tracker=tracker, max_tokens=1200)
-            system = WriteTimeMemorySystem(
-                extractor_llm=extractor_llm, answer_llm=answer_llm,
-                store_path=benchmark_dir / "stores" / f"{safe_name(conversation.id)}.sqlite3",
-                checkpoint_dir=benchmark_dir,
-                arm=arm,
-                fewshot=arm_config["fewshot"] and emission == "pointer",
-                format_name=format_name,
-                prompt_revision=prompt_revision, emission=emission,
-                retrieval_k=retrieval_k, dense_weight=dense_weight,
-                bm25_weight=bm25_weight, demotion_factor=demotion_factor,
-            )
-            before_ingest = system.usage()
-            for session in conversation.sessions:
-                system.ingest(session)
-            write_usage = usage_delta(before_ingest, system.usage())
-            extraction_results.extend(system.extractions)
-            memory_text = "\n".join(record.content for record in system.store.all())
-            for question in questions:
-                if question.id not in answer_rows:
-                    before_answer = system.usage()
-                    started = time.perf_counter()
-                    hypothesis = system.answer(
-                        question.text, question.date, question.instruction
-                    )
-                    wall_ms = (time.perf_counter() - started) * 1000
-                    answer_usage = usage_delta(before_answer, system.usage())
-                    usage = add_usage(write_usage, answer_usage)
-                    write_usage = {}
-                    row = {
-                        "question_id": question.id,
-                        "conversation_id": conversation.id,
-                        "category": question.category,
-                        "question": question.text,
-                        "reference": question.reference,
-                        "hypothesis": hypothesis,
-                        "answer_input_hash": system.last_answer_hash,
-                        "retrieved_ids": [item.record.id for item in system.last_retrieved],
-                        "recall_proxy": recall_proxy(
-                            question.reference, question.category, memory_text
-                        ),
-                        "supersession_accuracy": supersession_rank_ok(
-                            system, question.category
-                        ),
-                        "usage": usage,
-                        "wall_clock_ms": round(wall_ms, 3),
-                        "locomo_category": question.locomo_category,
-                    }
-                    append_jsonl(answers_path, row)
-                    answer_rows[question.id] = row
-                if question.id not in judged_rows:
-                    answer_row = answer_rows[question.id]
-                    judgement = judge.judge(
-                        question_id=question.id, benchmark=benchmark,
-                        question=question.text, reference=question.reference,
-                        response=answer_row["hypothesis"],
-                    )
-                    append_jsonl(judged_path, judgement)
-                    judged_rows[question.id] = judgement
-            system.close()
+        system = WriteTimeMemorySystem(
+            extractor_llm=extractor_llm, answer_llm=answer_llm,
+            store_path=benchmark_dir / "stores" / f"{safe_name(conversation.id)}.sqlite3",
+            checkpoint_dir=benchmark_dir,
+            arm=arm,
+            fewshot=arm_config["fewshot"] and emission == "pointer",
+            format_name=format_name,
+            prompt_revision=prompt_revision, emission=emission,
+            retrieval_k=retrieval_k, dense_weight=dense_weight,
+            bm25_weight=bm25_weight, demotion_factor=demotion_factor,
+        )
+        answer_rows, judged_rows, extraction_results = [], [], []
+        before_ingest = system.usage()
+        for session in conversation.sessions:
+            system.ingest(session)
+        write_usage = usage_delta(before_ingest, system.usage())
+        extraction_results.extend(system.extractions)
+        memory_text = "\n".join(record.content
+                                 for record in system.store.all())
+        for question, existing_answer, existing_judgement in questions:
+            row = existing_answer
+            if row is None:
+                before_answer = system.usage()
+                started = time.perf_counter()
+                hypothesis = system.answer(
+                    question.text, question.date, question.instruction
+                )
+                wall_ms = (time.perf_counter() - started) * 1000
+                answer_usage = usage_delta(before_answer, system.usage())
+                usage = add_usage(write_usage, answer_usage)
+                write_usage = {}
+                row = {
+                    "question_id": question.id,
+                    "conversation_id": conversation.id,
+                    "category": question.category,
+                    "question": question.text,
+                    "reference": question.reference,
+                    "hypothesis": hypothesis,
+                    "answer_input_hash": system.last_answer_hash,
+                    "retrieved_ids": [item.record.id
+                                      for item in system.last_retrieved],
+                    "recall_proxy": recall_proxy(
+                        question.reference, question.category, memory_text
+                    ),
+                    "supersession_accuracy": supersession_rank_ok(
+                        system, question.category
+                    ),
+                    "usage": usage,
+                    "wall_clock_ms": round(wall_ms, 3),
+                    "locomo_category": question.locomo_category,
+                }
+                append_jsonl(benchmark_dir / "answers.jsonl", row)
+            answer_rows.append(row)
+            judgement = existing_judgement
+            if judgement is None:
+                judgement = judge.judge(
+                    question_id=question.id, benchmark=benchmark,
+                    question=question.text, reference=question.reference,
+                    response=row["hypothesis"],
+                )
+                append_jsonl(benchmark_dir / "judged.jsonl", judgement)
+            judged_rows.append(judgement)
+        system.close()
+        return {"benchmark": benchmark, "answer_rows": answer_rows,
+                "judged_rows": judged_rows,
+                "extractions": extraction_results}
 
-        active_answer_rows = [row for row in answer_rows.values()
-                              if selected is None or row["question_id"] in selected]
-        active_judged_rows = [row for row in judged_rows.values()
-                              if selected is None or row["question_id"] in selected]
+    tasks = []
+    for benchmark in benchmarks:
+        benchmark_dir = run_root / benchmark
+        benchmark_dir.mkdir(parents=True, exist_ok=True)
+        existing_answers = {row["question_id"]: row
+                           for row in read_jsonl(benchmark_dir / "answers.jsonl")}
+        existing_judged = {row["question_id"]: row
+                          for row in read_jsonl(benchmark_dir / "judged.jsonl")}
+        selected = selected_question_ids(tier, benchmark, split_name)
+        for conversation in load_conversations(tier, benchmark):
+            questions = [
+                (question,
+                 existing_answers.get(question.id),
+                 existing_judged.get(question.id))
+                for question in conversation.questions
+                if selected is None or question.id in selected
+            ]
+            if questions:
+                tasks.append((benchmark, conversation, questions))
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, workers)
+    ) as pool:
+        outcomes = list(pool.map(
+            lambda task: process_conversation(*task), tasks
+        ))
+
+    for benchmark in benchmarks:
+        chunk = [outcome for outcome in outcomes
+                 if outcome["benchmark"] == benchmark]
+        active_answer_rows = [row for outcome in chunk
+                              for row in outcome["answer_rows"]]
+        active_judged_rows = [row for outcome in chunk
+                              for row in outcome["judged_rows"]]
+        extraction_results = [result for outcome in chunk
+                              for result in outcome["extractions"]]
         labels = [1 if row["label"] else 0 for row in active_judged_rows]
         recall_values = [row["recall_proxy"] for row in active_answer_rows
                          if row.get("recall_proxy") is not None]
@@ -485,7 +516,7 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
                 round(sum(lexical_scores) / len(lexical_scores), 4)
                 if lexical_scores else None
             )
-        (benchmark_dir / "summary.json").write_text(
+        (run_root / benchmark / "summary.json").write_text(
             json.dumps(benchmark_summary, indent=2) + "\n", encoding="utf-8"
         )
         overall["benchmarks"][benchmark] = benchmark_summary
@@ -944,6 +975,7 @@ def main() -> None:
                                      "coverage-f1"])
     run_parser.add_argument("--emission", default="pointer",
                             choices=["pointer", "simple"])
+    run_parser.add_argument("--workers", type=int, default=3)
     run_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
     fast_parser = subparsers.add_parser(
         "fastloop",
@@ -987,7 +1019,7 @@ def main() -> None:
                 tier=args.tier, arm=args.arm, tracker=tracker,
                 format_name=args.format, split_name=args.split,
                 prompt_revision=args.extractor_prompt,
-                emission=args.emission,
+                emission=args.emission, workers=args.workers,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
             )
         elif args.command == "fastloop":
