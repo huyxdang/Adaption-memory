@@ -94,11 +94,19 @@ within-session flip-flops still collapse to the durable conclusion.
 promotion gate — dev 0.5778 vs control 0.4852 (+9.3), holdout 0.5778 vs
 control 0.4722 (+10.6), with zero dev-to-holdout drop. Replaces **failed
 at signal scale** (dev 0.4537, below the control) despite winning the
-Qwen smoke fastloop: its supersession-link accuracy collapsed (0.5
-LongMemEval, 0.0 BEAM) — restated text was matched to the wrong
-candidate or dropped, and a wrong link actively demotes a live fact.
-Methodology lesson: store-coverage metrics cannot see link quality, and
-smoke had too few update questions for supersession accuracy to warn us.
+Qwen smoke fastloop. Log forensics located the exact mechanism: the
+format suppressed linking itself. With identical prompts and record
+volume (~3,740 records each), the numbered variant emitted 85 update
+links; replaces emitted 39 (1.0%) — restating a sentence is expensive
+and carries an implicit accuracy bar, so the model defaulted to null.
+Unlinked updates never demote their stale predecessors, so
+knowledge-update questions degraded (supersession accuracy 0.0 on
+BEAM). The text-matching resolver itself was mostly innocent: 37 of 45
+emitted links resolved correctly. Lesson: emission formats change not
+just what a model can express but what it bothers to do — a three-
+character link gets used, an expensive one gets skipped. Second lesson:
+store-coverage metrics cannot see link behavior, and smoke had too few
+update questions for supersession accuracy to warn us.
 The replaces idea stays open only behind a smarter resolver (e.g.
 embedding matching); the promoted interface is simple + coverage-f1.
 
