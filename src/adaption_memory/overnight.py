@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import concurrent.futures
 import json
 import os
 import shutil
@@ -627,7 +628,7 @@ def fastloop_config_hash(arm: str, format_name: str,
     if local:
         system_prompt = "/no_think\n" + system_prompt + LOCAL_OUTPUT_INSTRUCTION
     return stable_hash({
-        "schema": 1,
+        "schema": 2,  # v2: per-conversation checkpoint files
         "arm": arm,
         "model": arm_config["model"],
         "structured_output": arm_config["structured_output"],
@@ -645,7 +646,7 @@ def fastloop_config_hash(arm: str, format_name: str,
 def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
                  prompt_revision: str = "base",
                  benchmarks: tuple[str, ...] = BENCHMARKS,
-                 limit: int | None = None) -> dict:
+                 limit: int | None = None, workers: int = 3) -> dict:
     """Extraction-recall inner loop on the smoke tier.
 
     Runs write-time extraction plus local retrieval only — no answering and
@@ -655,6 +656,12 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
     misses (which fact, which bucket) for prompt iteration. Reruns with an
     unchanged config resume from checkpoints and are near-instant; any change
     to the prompts lands in a fresh config-hashed directory.
+
+    Sessions within a conversation are strictly sequential (each extraction
+    sees the store built by the previous ones), but conversations are fully
+    independent — own store, own checkpoints — so they run concurrently on
+    one shared pool across all requested benchmarks (LoCoMo and BEAM smoke
+    have one conversation each, so per-benchmark pools would not overlap).
     """
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
@@ -663,75 +670,102 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
     run_root = (RESULTS / "fastloop" / arm
                 / f"{format_name}-{prompt_revision}-{config_hash}")
     started = time.perf_counter()
+
+    def process_conversation(benchmark: str, conversation) -> dict:
+        benchmark_dir = run_root / benchmark
+        checkpoint_dir = benchmark_dir / "ckpt" / safe_name(conversation.id)
+        extractor_llm = make_llm(
+            arm_config["model"], base_url=arm_config["base_url"],
+            tracker=tracker, max_tokens=1400,
+            structured_output=arm_config["structured_output"],
+        )
+        system = WriteTimeMemorySystem(
+            extractor_llm=extractor_llm, answer_llm=_NoAnswerLLM(),
+            store_path=(benchmark_dir / "stores"
+                        / f"{safe_name(conversation.id)}.sqlite3"),
+            checkpoint_dir=checkpoint_dir,
+            arm=arm, fewshot=arm_config["fewshot"],
+            format_name=format_name, prompt_revision=prompt_revision,
+        )
+        before_ingest = system.usage()
+        for session in conversation.sessions:
+            system.ingest(session)
+        usage = usage_delta(before_ingest, system.usage())
+        rows, misses = [], []
+        memory_text = "\n".join(
+            record.content for record in system.store.all()
+        )
+        for question in conversation.questions:
+            stored = recall_proxy(
+                question.reference, question.category, memory_text
+            )
+            retrieved_items = system.retriever.retrieve(question.text)
+            system.last_retrieved = retrieved_items
+            retrieved_text = "\n".join(
+                item.record.content for item in retrieved_items
+            )
+            retrieved = recall_proxy(
+                question.reference, question.category, retrieved_text
+            )
+            rows.append({
+                "stored": stored,
+                "retrieved": retrieved,
+                "supersession": supersession_rank_ok(
+                    system, question.category
+                ),
+            })
+            if stored is False or (stored and retrieved is False):
+                misses.append({
+                    "question_id": question.id,
+                    "conversation_id": conversation.id,
+                    "category": question.category,
+                    "bucket": ("fact_not_extracted" if stored is False
+                               else "stored_not_retrieved"),
+                    "question": question.text,
+                    "reference": question.reference,
+                    "retrieved_ids": [item.record.id
+                                      for item in retrieved_items],
+                })
+        extractions = list(system.extractions)
+        system.close()
+        return {"benchmark": benchmark, "rows": rows, "misses": misses,
+                "extractions": extractions, "usage": usage}
+
+    tasks = []
+    for benchmark in benchmarks:
+        (run_root / benchmark).mkdir(parents=True, exist_ok=True)
+        conversations = load_conversations("smoke", benchmark)
+        if limit is not None:
+            conversations = conversations[:limit]
+        tasks.extend((benchmark, conversation)
+                     for conversation in conversations)
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, workers)
+    ) as pool:
+        outcomes = list(pool.map(
+            lambda task: process_conversation(*task), tasks
+        ))
+
     overall = {"tier": "smoke", "arm": arm, "format": format_name,
                "prompt_revision": prompt_revision, "config_hash": config_hash,
                "run_dir": (str(run_root.relative_to(ROOT))
                            if run_root.is_relative_to(ROOT)
                            else str(run_root)),
+               "workers": workers,
                "benchmarks": {}}
     for benchmark in benchmarks:
-        benchmark_dir = run_root / benchmark
-        benchmark_dir.mkdir(parents=True, exist_ok=True)
-        conversations = load_conversations("smoke", benchmark)
-        if limit is not None:
-            conversations = conversations[:limit]
-        rows, misses, extraction_results = [], [], []
+        chunk = [outcome for outcome in outcomes
+                 if outcome["benchmark"] == benchmark]
+        rows = [row for outcome in chunk for row in outcome["rows"]]
+        misses = sorted(
+            (miss for outcome in chunk for miss in outcome["misses"]),
+            key=lambda miss: miss["question_id"],
+        )
+        extraction_results = [result for outcome in chunk
+                              for result in outcome["extractions"]]
         usage: dict = {}
-        for conversation in conversations:
-            extractor_llm = make_llm(
-                arm_config["model"], base_url=arm_config["base_url"],
-                tracker=tracker, max_tokens=1400,
-                structured_output=arm_config["structured_output"],
-            )
-            system = WriteTimeMemorySystem(
-                extractor_llm=extractor_llm, answer_llm=_NoAnswerLLM(),
-                store_path=(benchmark_dir / "stores"
-                            / f"{safe_name(conversation.id)}.sqlite3"),
-                checkpoint_dir=benchmark_dir,
-                arm=arm, fewshot=arm_config["fewshot"],
-                format_name=format_name, prompt_revision=prompt_revision,
-            )
-            before_ingest = system.usage()
-            for session in conversation.sessions:
-                system.ingest(session)
-            usage = add_usage(usage, usage_delta(before_ingest, system.usage()))
-            extraction_results.extend(system.extractions)
-            memory_text = "\n".join(
-                record.content for record in system.store.all()
-            )
-            for question in conversation.questions:
-                stored = recall_proxy(
-                    question.reference, question.category, memory_text
-                )
-                retrieved_items = system.retriever.retrieve(question.text)
-                system.last_retrieved = retrieved_items
-                retrieved_text = "\n".join(
-                    item.record.content for item in retrieved_items
-                )
-                retrieved = recall_proxy(
-                    question.reference, question.category, retrieved_text
-                )
-                rows.append({
-                    "stored": stored,
-                    "retrieved": retrieved,
-                    "supersession": supersession_rank_ok(
-                        system, question.category
-                    ),
-                })
-                if stored is False or (stored and retrieved is False):
-                    misses.append({
-                        "question_id": question.id,
-                        "conversation_id": conversation.id,
-                        "category": question.category,
-                        "bucket": ("fact_not_extracted" if stored is False
-                                   else "stored_not_retrieved"),
-                        "question": question.text,
-                        "reference": question.reference,
-                        "retrieved_ids": [item.record.id
-                                          for item in retrieved_items],
-                    })
-            system.close()
-
+        for outcome in chunk:
+            usage = add_usage(usage, outcome["usage"])
         stored_values = [row["stored"] for row in rows
                          if row["stored"] is not None]
         retrieved_values = [row["retrieved"] for row in rows
@@ -740,7 +774,7 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
                                if row["supersession"] is not None]
         summary = {
             "benchmark": benchmark,
-            "conversations": len(conversations),
+            "conversations": len(chunk),
             "questions": len(rows),
             "store_recall": (round(sum(stored_values) / len(stored_values), 4)
                              if stored_values else None),
@@ -769,6 +803,7 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
             },
             "extractor_usage": usage,
         }
+        benchmark_dir = run_root / benchmark
         (benchmark_dir / "misses.jsonl").write_text(
             "".join(json.dumps(miss, ensure_ascii=False) + "\n"
                     for miss in misses),
@@ -779,6 +814,11 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
         )
         overall["benchmarks"][benchmark] = summary
     overall["wall_seconds"] = round(time.perf_counter() - started, 1)
+    sequential_ms = sum(
+        summary["extractor_usage"].get("latency_ms", 0)
+        for summary in overall["benchmarks"].values()
+    )
+    overall["sequential_estimate_seconds"] = round(sequential_ms / 1000, 1)
     (run_root / "summary.json").write_text(
         json.dumps(overall, indent=2) + "\n", encoding="utf-8"
     )
@@ -810,6 +850,9 @@ def main() -> None:
     fast_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
     fast_parser.add_argument("--limit", type=int, default=None,
                              help="cap conversations per benchmark")
+    fast_parser.add_argument("--workers", type=int, default=3,
+                             help="concurrent conversations (sessions within "
+                                  "a conversation stay sequential)")
     subparsers.add_parser("rescore-baselines")
     sft_parser = subparsers.add_parser("build-sft")
     sft_parser.add_argument("--format", default="F1",
@@ -834,7 +877,7 @@ def main() -> None:
                 arm=args.arm, tracker=tracker, format_name=args.format,
                 prompt_revision=args.extractor_prompt,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
-                limit=args.limit,
+                limit=args.limit, workers=args.workers,
             )
         elif args.command == "rescore-baselines":
             output = rescore_baselines(tracker)

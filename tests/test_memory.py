@@ -374,3 +374,45 @@ def test_fastloop_config_hash_tracks_prompt_content(monkeypatch):
     monkeypatch.setattr(overnight, "production_prompt",
                         lambda *args, **kwargs: "edited prompt")
     assert base != overnight.fastloop_config_hash("luna-target", "F1", "base")
+
+
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[1] / "data" / "mini" / "smoke"
+         / "longmemeval.json").exists(),
+    reason="smoke tier data not generated",
+)
+def test_fastloop_runs_conversations_concurrently_and_isolated(tmp_path, monkeypatch):
+    from adaption_memory import overnight
+    from adaption_memory.memory import system as memory_system
+
+    extraction = json.dumps({"records": [{
+        "type": "narrative",
+        "content": "The user shared some plans.",
+        "entities": ["user"],
+        "supersedes_id": None,
+    }]})
+
+    def fake_make_llm(model, **kwargs):
+        return FakeTrackedLLM(model, extraction)
+
+    monkeypatch.setattr(overnight, "make_llm", fake_make_llm)
+    monkeypatch.setattr(memory_system, "LocalEmbedder", FakeEmbedder)
+    monkeypatch.setattr(overnight, "RESULTS", tmp_path)
+    tracker = SpendTracker(tmp_path / "spend.json", cap_usd=40.0)
+
+    result = overnight.run_fastloop(
+        arm="luna-target", tracker=tracker,
+        benchmarks=("longmemeval",), limit=3, workers=2,
+    )
+    summary = result["benchmarks"]["longmemeval"]
+    assert summary["conversations"] == 3
+    assert summary["questions"] == 3
+    assert result["workers"] == 2
+    assert result["sequential_estimate_seconds"] >= 0
+    run_dir = tmp_path / "fastloop" / "luna-target" / Path(result["run_dir"]).name
+    checkpoint_dirs = sorted(
+        path.name for path in (run_dir / "longmemeval" / "ckpt").iterdir()
+    )
+    assert len(checkpoint_dirs) == 3
+    stores = list((run_dir / "longmemeval" / "stores").glob("*.sqlite3"))
+    assert len(stores) == 3

@@ -376,6 +376,14 @@ entirely — a qwen-arm iteration costs zero hosted tokens:
 uv run overnight-memory fastloop --arm qwen3-4b-zeroshot --benchmark locomo --limit 1
 ```
 
+Sessions within a conversation are strictly sequential (each extraction sees
+the store built by the previous ones), but conversations are independent, so
+they run on a shared pool across benchmarks (`--workers`, default 3; measured
+2.7x on the full smoke suite). Use the single-conversation form above (~100 s)
+while iterating, and the full suite (all nine smoke conversations, ~22
+scorable facts, `uv run overnight-memory fastloop --arm <arm> --workers 3`)
+to confirm a prompt change before promoting it to a signal run.
+
 It ingests smoke-tier conversations through the write path, then checks each
 question's reference against (a) the whole store and (b) the retrieved top-k,
 using the same strict recall proxy the signal runs report. Results land in

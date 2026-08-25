@@ -1519,3 +1519,43 @@
 **Blockers**
 
 - None.
+
+
+### 2026-08-25 - Fastloop conversations parallelized
+
+**Status:** complete
+
+**Completed**
+
+- Ran fastloop conversations on a shared thread pool across benchmarks
+  (`--workers`, default 3), keeping sessions within a conversation strictly
+  sequential. Checkpoints moved to per-conversation directories so threads
+  never share files; the config hash schema was bumped so old layouts land in
+  separate directories.
+- Verified the running Ollama server serves concurrent requests (3 calls in
+  4.4 s vs 11.4 s serial).
+- Ran the first full-suite fastloop: all nine smoke conversations, 44
+  extraction calls, in 513.5 s wall vs a 1378.9 s sequential estimate (2.7x).
+
+**Evidence**
+
+- 65 tests pass, including a concurrent multi-conversation fastloop test
+  asserting isolated per-conversation stores and checkpoints.
+- Full-suite qwen3-4b-zeroshot recall: LongMemEval 0.14 (1/7), LoCoMo 0.0
+  (0/4), BEAM 0.0 (0/9); 19 of 22 scorable facts never extracted; 50 records
+  rejected by validation. Every miss is fact_not_extracted; retrieval loses
+  nothing that was stored.
+
+**Decisions**
+
+- Iterate prompts on the ~100 s single-conversation form; confirm on the
+  ~8.5 min full suite before any signal run.
+
+**Next**
+
+- Read the rejection log and fix extraction recall (prompt-only constraints
+  vs caps) against the full-suite miss list.
+
+**Blockers**
+
+- None.
