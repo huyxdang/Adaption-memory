@@ -1605,3 +1605,28 @@
 **Blockers**
 
 - Hosted models unreachable on the current network (hotspot away).
+
+### 2026-08-25 - Extraction interface passed the signal gate at teacher tier
+
+**Status:** complete
+
+**Completed**
+
+- Ran the three-way signal-dev comparison with Luna extraction: control
+  (pointer/base) 0.4852, simple+coverage 0.5778, replaces+coverage 0.4537.
+- Confirmed the winner on the untouched holdout split: 0.5778 vs the
+  control's 0.4722 (+10.6 points; dev gain +9.3; no dev-to-holdout drop).
+- Recorded the replaces variant as a signal-scale negative result caused by
+  supersession-link mismatch, invisible to smoke-tier store-coverage.
+- Promoted simple + coverage-f1 as the canonical teacher-path extraction
+  interface in FINDINGS.md; local-arm defaults await Qwen confirmation.
+
+**Next**
+
+- Finish the Qwen signal-dev candidate and control arms from banked
+  extraction checkpoints; regenerate SFT teacher data with the promoted
+  interface.
+
+**Blockers**
+
+- None.

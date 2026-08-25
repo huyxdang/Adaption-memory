@@ -90,7 +90,17 @@ Design caveats recorded: matching is scoped to the candidates shown in
 that call (a chain hop can only target the current belief, which also
 resolves duplicate-text chains like 4 -> 5 -> 4 unambiguously), and
 within-session flip-flops still collapse to the durable conclusion.
-Signal-tier comparison of numbered vs replaces is running at teacher tier.
+**Signal-tier verdict (teacher tier):** numbered updates passed the
+promotion gate — dev 0.5778 vs control 0.4852 (+9.3), holdout 0.5778 vs
+control 0.4722 (+10.6), with zero dev-to-holdout drop. Replaces **failed
+at signal scale** (dev 0.4537, below the control) despite winning the
+Qwen smoke fastloop: its supersession-link accuracy collapsed (0.5
+LongMemEval, 0.0 BEAM) — restated text was matched to the wrong
+candidate or dropped, and a wrong link actively demotes a live fact.
+Methodology lesson: store-coverage metrics cannot see link quality, and
+smoke had too few update questions for supersession accuracy to warn us.
+The replaces idea stays open only behind a smarter resolver (e.g.
+embedding matching); the promoted interface is simple + coverage-f1.
 
 ## 3. Negative results (all with evidence under results/fastloop/)
 
@@ -151,8 +161,10 @@ are fully independent. Exploiting that:
 
 ## 6. Open items
 
-- Signal-dev gate verdicts: control 0.4852 vs numbered-updates candidate
-  vs replaces candidate, all Luna-extracted (running).
+- Gate passed at teacher tier: simple + coverage-f1 is the canonical
+  extraction interface for Luna-extracted runs (dev +9.3, holdout +10.6).
+  Canonical defaults for the local arm flip only after the Qwen signal
+  confirmation, which resumes from the banked extraction checkpoints.
 - Exact-value retention is the remaining weak spot everywhere: specific
   strings like "Mindful.org" and "6:45 AM" are the facts that die even
   under the best configs. Next prompt iteration targets those.
