@@ -317,7 +317,7 @@ def supersession_rank_ok(system: WriteTimeMemorySystem, category: str) -> bool |
 def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             format_name: str = "F1", split_name: str | None = None,
             prompt_revision: str = "base", emission: str = "pointer",
-            workers: int = 3,
+            workers: int = 3, extract_only: bool = False,
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
@@ -396,6 +396,12 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             system.ingest(session)
         write_usage = usage_delta(before_ingest, system.usage())
         extraction_results.extend(system.extractions)
+        if extract_only:
+            # Bank the local write path while hosted models are unreachable;
+            # a later full run replays these checkpoints and only answers.
+            system.close()
+            return {"benchmark": benchmark, "answer_rows": [],
+                    "judged_rows": [], "extractions": extraction_results}
         memory_text = "\n".join(record.content
                                  for record in system.store.all())
         for question, existing_answer, existing_judgement in questions:
@@ -979,6 +985,9 @@ def main() -> None:
     run_parser.add_argument("--emission", default="pointer",
                             choices=["pointer", "simple"])
     run_parser.add_argument("--workers", type=int, default=3)
+    run_parser.add_argument("--extract-only", action="store_true",
+                            help="run the local write path only; skip hosted "
+                                 "answering and judging (no summary values)")
     run_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
     fast_parser = subparsers.add_parser(
         "fastloop",
@@ -1023,6 +1032,7 @@ def main() -> None:
                 format_name=args.format, split_name=args.split,
                 prompt_revision=args.extractor_prompt,
                 emission=args.emission, workers=args.workers,
+                extract_only=args.extract_only,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
             )
         elif args.command == "fastloop":
