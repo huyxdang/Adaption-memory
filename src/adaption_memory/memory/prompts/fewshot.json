@@ -1,0 +1,47 @@
+[
+  {
+    "name": "atomic_exact_date_and_figure",
+    "input": "Candidate memories:\n[]\n\nSession id: s1\nSession date: 2026-01-14\n<session>\nMina: The renewal is on 14 March 2026 and the approved budget is $4,800.\nKai: I wrote both down.\n</session>",
+    "output": {
+      "records": [
+        {"type": "atomic", "content": "Mina's renewal is on 14 March 2026.", "entities": ["Mina"], "supersedes_id": null},
+        {"type": "atomic", "content": "Mina's approved budget is $4,800.", "entities": ["Mina"], "supersedes_id": null}
+      ]
+    }
+  },
+  {
+    "name": "narrative_decision_reason",
+    "input": "Candidate memories:\n[]\n\nSession id: s2\nSession date: 2026-02-01\n<session>\nAri: We chose the smaller venue because the team wants more discussion and less stage time.\nBo: Then I will cancel the ballroom hold.\n</session>",
+    "output": {
+      "records": [
+        {"type": "narrative", "content": "Ari's team chose the smaller venue to encourage discussion and reduce stage time.", "entities": ["Ari"], "supersedes_id": null}
+      ]
+    }
+  },
+  {
+    "name": "supersession",
+    "input": "Candidate memories:\n[{\"id\":\"mem_city_old\",\"type\":\"atomic\",\"content\":\"Noor lives in Hanoi.\",\"entities\":[\"Noor\"]}]\n\nSession id: s3\nSession date: 2026-03-05\n<session>\nNoor: I moved from Hanoi to Da Nang last week. Da Nang is home now.\nLee: I will use the new address.\n</session>",
+    "output": {
+      "records": [
+        {"type": "atomic", "content": "Noor lives in Da Nang.", "entities": ["Noor"], "supersedes_id": "mem_city_old"},
+        {"type": "narrative", "content": "Noor moved from Hanoi to Da Nang and now considers Da Nang home.", "entities": ["Noor"], "supersedes_id": null}
+      ]
+    }
+  },
+  {
+    "name": "duplicate",
+    "input": "Candidate memories:\n[{\"id\":\"mem_pet\",\"type\":\"atomic\",\"content\":\"Iris has a cat named Pixel.\",\"entities\":[\"Iris\",\"Pixel\"]}]\n\nSession id: s4\nSession date: 2026-04-09\n<session>\nIris: Pixel is my cat.\nMo: I remember.\n</session>",
+    "output": {"records": []}
+  },
+  {
+    "name": "mixed_records",
+    "input": "Candidate memories:\n[]\n\nSession id: s5\nSession date: 2026-05-20\n<session>\nTao: I accepted the Singapore role because it keeps me close to family.\nTao: My start date is 2 June 2026 and the employee ID is SG-1842.\nUma: I will update onboarding.\n</session>",
+    "output": {
+      "records": [
+        {"type": "narrative", "content": "Tao accepted the Singapore role because it keeps Tao close to family.", "entities": ["Tao", "Singapore"], "supersedes_id": null},
+        {"type": "atomic", "content": "Tao's start date is 2 June 2026.", "entities": ["Tao"], "supersedes_id": null},
+        {"type": "atomic", "content": "Tao's employee ID is SG-1842.", "entities": ["Tao"], "supersedes_id": null}
+      ]
+    }
+  }
+]

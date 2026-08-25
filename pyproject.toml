@@ -10,11 +10,15 @@ dependencies = [
     "regex>=2024.11",
     "scipy>=1.14",
     "json-repair>=0.30",
+    "fastembed>=0.7",
+    "rank-bm25>=0.2.2",
     "tqdm>=4.66",
 ]
 
 [project.scripts]
 eval = "adaption_memory.evals.run:main"
+make-mini = "adaption_memory.evals.mini:main"
+overnight-memory = "adaption_memory.overnight:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3"]

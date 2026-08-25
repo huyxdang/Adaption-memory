@@ -12,7 +12,8 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from adaption_memory.evals.common import append_jsonl, done_ids, read_jsonl, write_summary
+from adaption_memory.evals.common import (append_jsonl, done_ids, read_jsonl,
+                                          usage_delta, write_summary)
 from adaption_memory.interface import Session, Turn
 from adaption_memory.llm import LLM
 
@@ -49,13 +50,13 @@ def run_answers(make_system, instances: list[dict], out_path: Path,
         else:
             system = make_system()
             system.reset()
-            before = system.llm.usage.snapshot()
+            before = system.usage()
             for session in sessions_of(inst):
                 system.ingest(session)
             hyp = system.answer(inst["question"], inst["question_date"],
                                 ANSWER_INSTRUCTION)
-            after = system.llm.usage.snapshot()
-            usage = {k: after[k] - before[k] for k in after}
+            after = system.usage()
+            usage = usage_delta(before, after)
         append_jsonl(out_path, {"question_id": inst["question_id"],
                                 "hypothesis": hyp, "usage": usage})
 
@@ -85,7 +86,7 @@ def get_anscheck_prompt(task, question, answer, response, abstention=False):
 
 
 def run_judge(judge: LLM, instances: list[dict], hyp_path: Path,
-              out_path: Path) -> None:
+              out_path: Path, max_tokens: int = 10) -> None:
     by_id = {i["question_id"]: i for i in instances}
     done = done_ids(out_path, "question_id")
     for h in tqdm(read_jsonl(hyp_path), desc="longmemeval:judge"):
@@ -96,7 +97,8 @@ def run_judge(judge: LLM, instances: list[dict], hyp_path: Path,
         prompt = get_anscheck_prompt(
             inst["question_type"], inst["question"], inst["answer"],
             h["hypothesis"], abstention="_abs" in qid)
-        resp = judge.chat([{"role": "user", "content": prompt}], max_tokens=10)
+        resp = judge.chat([{"role": "user", "content": prompt}],
+                          max_tokens=max_tokens)
         append_jsonl(out_path, {"question_id": qid,
                                 "label": "yes" in resp.lower(),
                                 "judge_response": resp})

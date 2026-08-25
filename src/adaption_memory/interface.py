@@ -1,7 +1,7 @@
 """Common interface between memory systems and eval harnesses.
 
 Every benchmark adapter converts its data into Sessions and drives a
-MemorySystem through the same three calls, so the memory system under
+MemorySystem through the same four calls, so the memory system under
 test never sees benchmark-specific formats.
 """
 
@@ -34,4 +34,10 @@ class MemorySystem(Protocol):
     def answer(self, question: str, question_date: str | None = None,
                instruction: str | None = None) -> str:
         """Answer a question against everything ingested so far."""
+        ...
+
+    def usage(self) -> dict:
+        """Cumulative LLM usage over all internal models
+        ({calls, prompt_tokens, completion_tokens}). The eval harness diffs
+        snapshots of this around each question to attribute cost."""
         ...

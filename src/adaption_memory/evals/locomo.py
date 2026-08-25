@@ -18,7 +18,8 @@ import regex
 from nltk.stem import PorterStemmer
 from tqdm import tqdm
 
-from adaption_memory.evals.common import append_jsonl, done_ids, read_jsonl, write_summary
+from adaption_memory.evals.common import (add_usage, append_jsonl, done_ids,
+                                          read_jsonl, usage_delta, write_summary)
 from adaption_memory.interface import Session, Turn
 
 ps = PorterStemmer()
@@ -59,6 +60,14 @@ def question_id(sample_id: str, qi: int) -> str:
     return f"{sample_id}:{qi}"
 
 
+def oracle_answer(question: dict) -> str:
+    """Return the gold hypothesis in the form consumed by the official scorer."""
+    gold = str(question.get("answer", "Not mentioned in the conversation"))
+    if question["category"] == 3:
+        return gold.split(";")[0].strip()
+    return gold
+
+
 def run_answers(make_system, samples: list[dict], out_path: Path,
                 limit: int | None = None, oracle: bool = False) -> None:
     done = done_ids(out_path, "question_id")
@@ -68,20 +77,28 @@ def run_answers(make_system, samples: list[dict], out_path: Path,
                 if question_id(sample["sample_id"], i) not in done]
         if not todo:
             continue
+        write_usage = {}
         if not oracle:
             system = make_system()
             system.reset()
+            before_ingest = system.usage()
             for session in sessions_of(sample):
                 system.ingest(session)
+            write_usage = usage_delta(before_ingest, system.usage())
+            # A resumed logical benchmark run already attributed this sample's
+            # one-time write cost to a previously completed answer.
+            if any(question_id(sample["sample_id"], i) in done
+                   for i in range(len(qa))):
+                write_usage = {}
         for i, q in tqdm(todo, desc=f'locomo:{sample["sample_id"]}'):
             if oracle:
-                gold = q.get("answer", "Not mentioned in the conversation")
-                hyp, usage = str(gold), {}
+                hyp, usage = oracle_answer(q), {}
             else:
-                before = system.llm.usage.snapshot()
+                before = system.usage()
                 hyp = system.answer(q["question"], instruction=ANSWER_INSTRUCTION)
-                after = system.llm.usage.snapshot()
-                usage = {k: after[k] - before[k] for k in after}
+                after = system.usage()
+                usage = add_usage(write_usage, usage_delta(before, after))
+                write_usage = {}
             append_jsonl(out_path, {
                 "question_id": question_id(sample["sample_id"], i),
                 "category": q["category"], "hypothesis": hyp, "usage": usage})

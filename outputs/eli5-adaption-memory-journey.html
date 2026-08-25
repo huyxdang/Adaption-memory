@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ELI5 — Our Adaption Memory Journey</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #5f6b7d;
+      --paper: #fffdf7;
+      --blue: #4b7bec;
+      --blue-soft: #eaf0ff;
+      --green: #18a46b;
+      --green-soft: #e3f8ef;
+      --orange: #ee8a35;
+      --orange-soft: #fff0df;
+      --purple: #7b61d1;
+      --purple-soft: #f0ebff;
+      --red: #df5b57;
+      --line: #dbe0e8;
+      --shadow: 0 14px 40px rgba(28, 39, 58, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 4%, #edf3ff 0, transparent 22rem),
+        radial-gradient(circle at 92% 18%, #fff1df 0, transparent 25rem),
+        var(--paper);
+      font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui, sans-serif;
+      line-height: 1.5;
+    }
+
+    main { width: min(1160px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 72px 0 34px; text-align: center; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 13px;
+      border: 1px solid #cbd7f6;
+      border-radius: 999px;
+      color: #3458af;
+      background: rgba(255,255,255,.8);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 850px;
+      margin: 22px auto 14px;
+      font-size: clamp(42px, 7vw, 76px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+    .lead {
+      max-width: 720px;
+      margin: 0 auto;
+      color: var(--muted);
+      font-size: clamp(18px, 2.2vw, 23px);
+    }
+    .lead strong { color: var(--ink); }
+
+    section { margin: 34px 0 74px; }
+    .section-head { margin-bottom: 24px; }
+    .section-head h2 {
+      margin: 0 0 8px;
+      font-size: clamp(31px, 4vw, 48px);
+      letter-spacing: -.04em;
+      line-height: 1.05;
+    }
+    .section-head p { margin: 0; color: var(--muted); font-size: 18px; }
+
+    .hero-visual {
+      overflow: hidden;
+      border: 1px solid #d6deef;
+      border-radius: 30px;
+      background: rgba(255,255,255,.88);
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .hero-visual svg { display: block; width: 100%; height: auto; }
+
+    .plain-note {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 15px;
+      align-items: center;
+      margin-top: 16px;
+      padding: 18px 20px;
+      border-radius: 20px;
+      background: var(--blue-soft);
+      color: #274683;
+    }
+    .plain-note .icon { font-size: 34px; text-align: center; }
+    .plain-note p { margin: 0; font-size: 17px; }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 18px;
+      bottom: 18px;
+      width: 2px;
+      background: linear-gradient(var(--blue), var(--purple), var(--green));
+      opacity: .25;
+    }
+    .step {
+      position: relative;
+      min-height: 218px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 9px 28px rgba(28,39,58,.06);
+    }
+    .step:nth-child(odd) { margin-right: 14px; }
+    .step:nth-child(even) { margin-left: 14px; }
+    .step-no {
+      display: inline-grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: var(--ink);
+      color: white;
+      font-weight: 900;
+    }
+    .step .emoji { float: right; font-size: 38px; }
+    .step h3 { margin: 18px 0 8px; font-size: 23px; letter-spacing: -.02em; }
+    .step p { margin: 0; color: var(--muted); }
+    .step .tiny {
+      display: inline-block;
+      margin-top: 14px;
+      padding: 6px 9px;
+      border-radius: 9px;
+      background: #f1f3f7;
+      color: #536076;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .brains {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      align-items: end;
+    }
+    .brain {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      min-height: 210px;
+      padding: 20px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: white;
+      box-shadow: 0 9px 26px rgba(28,39,58,.05);
+    }
+    .brain:nth-child(1) { min-height: 170px; background: #f5f7fa; }
+    .brain:nth-child(2) { min-height: 195px; background: var(--green-soft); }
+    .brain:nth-child(3) { min-height: 225px; background: var(--orange-soft); }
+    .brain:nth-child(4) { min-height: 255px; background: var(--purple-soft); }
+    .brain .face { font-size: 43px; }
+    .brain h3 { margin: 10px 0 3px; font-size: 24px; }
+    .brain p { margin: 0; color: var(--muted); font-size: 15px; }
+    .brain b { color: var(--ink); }
+
+    .exam-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .exam {
+      padding: 24px;
+      border-radius: 24px;
+      color: white;
+      min-height: 230px;
+      box-shadow: var(--shadow);
+    }
+    .exam:nth-child(1) { background: #3868d9; }
+    .exam:nth-child(2) { background: #11875b; }
+    .exam:nth-child(3) { background: #7651be; }
+    .exam .big { font-size: 43px; }
+    .exam h3 { margin: 13px 0 8px; font-size: 25px; }
+    .exam p { margin: 0; color: rgba(255,255,255,.82); }
+
+    .tiers {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .tier {
+      position: relative;
+      overflow: hidden;
+      padding: 26px;
+      border-radius: 26px;
+      background: white;
+      border: 1px solid var(--line);
+      box-shadow: 0 9px 28px rgba(28,39,58,.06);
+    }
+    .tier::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      height: 8px;
+      background: var(--tier-color);
+    }
+    .tier.smoke { --tier-color: var(--green); }
+    .tier.signal { --tier-color: var(--orange); }
+    .tier.full { --tier-color: var(--purple); }
+    .tier .label { color: var(--tier-color); font-weight: 900; text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
+    .tier .number { margin: 7px 0 2px; font-size: 52px; line-height: 1; font-weight: 950; letter-spacing: -.05em; }
+    .tier .size { color: var(--muted); font-weight: 700; }
+    .tier p { margin: 18px 0 0; color: var(--muted); }
+    .tier .calls { margin-top: 13px; font-size: 13px; font-weight: 800; color: var(--ink); }
+
+    .status-board {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 18px;
+    }
+    .status-card {
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: white;
+      box-shadow: var(--shadow);
+    }
+    .status-card h3 { margin: 0 0 17px; font-size: 25px; }
+    .checks { display: grid; gap: 11px; }
+    .check { display: grid; grid-template-columns: 27px 1fr; gap: 10px; align-items: start; }
+    .check span:first-child { color: var(--green); font-weight: 950; }
+    .check p { margin: 0; color: var(--muted); }
+    .score-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 14px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .score-row:last-child { border-bottom: 0; }
+    .score-row span { color: var(--muted); }
+    .score-row strong { font-variant-numeric: tabular-nums; }
+    .warning {
+      margin-top: 17px;
+      padding: 14px 15px;
+      border-radius: 15px;
+      color: #8a4b16;
+      background: var(--orange-soft);
+      font-size: 14px;
+    }
+
+    .next-flow {
+      display: grid;
+      grid-template-columns: 1fr 56px 1fr 56px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .next-box {
+      min-height: 170px;
+      padding: 23px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+    .next-box h3 { margin: 10px 0 6px; }
+    .next-box p { margin: 0; color: var(--muted); }
+    .arrow { text-align: center; color: #9aa5b5; font-size: 31px; }
+
+    footer {
+      margin: 30px 0 55px;
+      padding: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      text-align: center;
+      font-size: 14px;
+    }
+
+    @media (max-width: 820px) {
+      header { padding-top: 46px; }
+      .timeline, .brains, .exam-grid, .tiers, .status-board { grid-template-columns: 1fr; }
+      .timeline::before { display: none; }
+      .step:nth-child(n) { margin: 0; min-height: auto; }
+      .brain:nth-child(n) { min-height: auto; }
+      .next-flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">🧸 ELI5 project story</div>
+      <h1>We built a notebook for a forgetful robot.</h1>
+      <p class="lead">Then we gave the robot <strong>small, medium, and giant exams</strong> to see whether its memory actually worked.</p>
+    </header>
+
+    <section>
+      <div class="hero-visual" aria-label="How the memory system works">
+        <svg viewBox="0 0 1120 430" role="img" aria-labelledby="flow-title flow-desc">
+          <title id="flow-title">How the robot memory works</title>
+          <desc id="flow-desc">Conversations become story notes and fact cards, useful notes are retrieved, and the robot answers an exam question.</desc>
+          <defs>
+            <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L9,3 z" fill="#9ba8bb"/>
+            </marker>
+            <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#25334f" flood-opacity=".12"/>
+            </filter>
+          </defs>
+
+          <rect x="25" y="98" width="190" height="230" rx="28" fill="#eaf0ff" stroke="#9bb3ef" filter="url(#softShadow)"/>
+          <text x="120" y="145" text-anchor="middle" font-size="44">💬</text>
+          <text x="120" y="190" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">Chats happen</text>
+          <rect x="56" y="217" width="128" height="32" rx="16" fill="#fff"/>
+          <text x="120" y="239" text-anchor="middle" font-size="14" fill="#4f5c72">“I moved to Paris.”</text>
+          <rect x="48" y="261" width="144" height="32" rx="16" fill="#fff"/>
+          <text x="120" y="283" text-anchor="middle" font-size="14" fill="#4f5c72">“Now I live in Lyon.”</text>
+
+          <path d="M224 212 H294" stroke="#9ba8bb" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+          <rect x="310" y="58" width="245" height="310" rx="28" fill="#fff0df" stroke="#efbc85" filter="url(#softShadow)"/>
+          <text x="432" y="109" text-anchor="middle" font-size="44">✍️</text>
+          <text x="432" y="151" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">Memory writer</text>
+          <text x="432" y="177" text-anchor="middle" font-size="14" fill="#6b5a4b">Turns chat into two useful shapes</text>
+          <rect x="340" y="205" width="185" height="62" rx="15" fill="#fff" stroke="#ead2b8"/>
+          <text x="357" y="231" font-size="15" font-weight="800" fill="#7b542f">📖 Story note</text>
+          <text x="357" y="252" font-size="13" fill="#6d6258">Why and how things changed</text>
+          <rect x="340" y="281" width="185" height="62" rx="15" fill="#fff" stroke="#ead2b8"/>
+          <text x="357" y="307" font-size="15" font-weight="800" fill="#7b542f">🏷️ Fact card</text>
+          <text x="357" y="328" font-size="13" fill="#6d6258">Current city = Lyon</text>
+
+          <path d="M565 212 H635" stroke="#9ba8bb" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+          <rect x="650" y="98" width="190" height="230" rx="28" fill="#e3f8ef" stroke="#8bd5b6" filter="url(#softShadow)"/>
+          <text x="745" y="145" text-anchor="middle" font-size="44">🔎</text>
+          <text x="745" y="190" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">Find useful notes</text>
+          <text x="745" y="222" text-anchor="middle" font-size="14" fill="#526d61">Old Paris card:</text>
+          <text x="745" y="244" text-anchor="middle" font-size="14" text-decoration="line-through" fill="#83978e">not current</text>
+          <text x="745" y="274" text-anchor="middle" font-size="14" fill="#286e53">Lyon card:</text>
+          <text x="745" y="296" text-anchor="middle" font-size="14" font-weight="800" fill="#286e53">use this one ✓</text>
+
+          <path d="M850 212 H920" stroke="#9ba8bb" stroke-width="4" marker-end="url(#arrowhead)"/>
+
+          <rect x="935" y="98" width="160" height="230" rx="28" fill="#f0ebff" stroke="#bba8ef" filter="url(#softShadow)"/>
+          <text x="1015" y="145" text-anchor="middle" font-size="44">🤖</text>
+          <text x="1015" y="190" text-anchor="middle" font-size="22" font-weight="800" fill="#172033">Answer</text>
+          <text x="1015" y="231" text-anchor="middle" font-size="14" fill="#66577c">“Where now?”</text>
+          <rect x="963" y="253" width="104" height="43" rx="14" fill="#fff"/>
+          <text x="1015" y="281" text-anchor="middle" font-size="18" font-weight="900" fill="#7251be">Lyon</text>
+
+          <text x="560" y="408" text-anchor="middle" font-size="14" fill="#718096">Simplified picture: chats → write memory → retrieve → answer</text>
+        </svg>
+      </div>
+      <div class="plain-note">
+        <div class="icon">💡</div>
+        <p><strong>The big idea:</strong> do not wait until question time to search a giant chat pile. Make clean notes <em>while the chat is happening</em>.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>What happened, from the beginning</h2>
+        <p>One small working layer at a time.</p>
+      </div>
+      <div class="timeline">
+        <article class="step">
+          <span class="step-no">1</span><span class="emoji">🗺️</span>
+          <h3>We opened the box</h3>
+          <p>The repo already knew how to read and score three memory exams. But its clever write-time memory was still mostly a plan. We mapped the code and found the missing pieces.</p>
+          <span class="tiny">CODE SCAN</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">2</span><span class="emoji">🗂️</span>
+          <h3>We built the notebook</h3>
+          <p>Each chat session now makes story notes and exact fact cards. New facts can replace old facts without deleting history. A simple finder picks the useful notes for each question.</p>
+          <span class="tiny">ADAPTIVE MEMORY</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">3</span><span class="emoji">🧠</span>
+          <h3>We needed a robot brain</h3>
+          <p>Ollama became the local engine. Qwen was the brain inside it. The tiny 0.6B model was good for checking pipes, but not dependable enough for the real memory exam.</p>
+          <span class="tiny">OLLAMA + QWEN</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">4</span><span class="emoji">🚧</span>
+          <h3>The company network said “no”</h3>
+          <p>Trusted model sites were blocked. Turning off TLS did not solve the real policy block. We prepared safe allowlist/offline routes, then the hotspot let Ollama resume and finish the 1.7B download.</p>
+          <span class="tiny">NETWORK DETOUR</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">5</span><span class="emoji">🔧</span>
+          <h3>The exams found real bugs</h3>
+          <p>The stronger models exposed date mistakes, stale facts, loose matching, token-limit problems, and scorer edge cases. We fixed each one and added a test so it could not quietly return.</p>
+          <span class="tiny">1.7B → 4B</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">6</span><span class="emoji">☁️</span>
+          <h3>Luna gave us a cloud check</h3>
+          <p>GPT-5.6 Luna answered the small exam with medium reasoning; another Luna pass judged with high reasoning. The key lived only in a temporary process and was never saved in the repo.</p>
+          <span class="tiny">HOSTED BASELINE</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">7</span><span class="emoji">📏</span>
+          <h3>The first mini exam was too tiny</h3>
+          <p>It touched every skill, but one answer could swing a whole category. You challenged that. So we kept it as “smoke” and built a larger, distribution-aware “signal” exam.</p>
+          <span class="tiny">22 → 90 QUESTIONS</span>
+        </article>
+
+        <article class="step">
+          <span class="step-no">8</span><span class="emoji">🔒</span>
+          <h3>We locked the measuring tape</h3>
+          <p>Every run now records which data, model, settings, and endpoint it used. Smoke, signal, and full results cannot be accidentally mixed. Source files also have fingerprints.</p>
+          <span class="tiny">PROVENANCE + 44 TESTS</span>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>The different “brains” we discussed</h2>
+        <p>More size usually means better judgment—but also more waiting.</p>
+      </div>
+      <div class="brains">
+        <article class="brain">
+          <div class="face">🐣</div>
+          <h3>Qwen 0.6B</h3>
+          <p><b>Very fast.</b> Good for “does the pipe work?” Not trusted for benchmark quality.</p>
+        </article>
+        <article class="brain">
+          <div class="face">🐤</div>
+          <h3>Qwen 1.7B</h3>
+          <p><b>Daily local helper.</b> Fast enough to iterate and clean enough to judge simple labels.</p>
+        </article>
+        <article class="brain">
+          <div class="face">🦉</div>
+          <h3>Qwen 4B</h3>
+          <p><b>Stronger local answerer.</b> Used for the more serious pre-final local check.</p>
+        </article>
+        <article class="brain">
+          <div class="face">🚀</div>
+          <h3>GPT-5.6 Luna</h3>
+          <p><b>Cloud speed + quality.</b> Used for the measured hosted smoke baseline.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>The three exams</h2>
+        <p>“Benchmark” is just a grown-up word for a repeatable test.</p>
+      </div>
+      <div class="exam-grid">
+        <article class="exam">
+          <div class="big">🧵</div>
+          <h3>LongMemEval</h3>
+          <p>Can the robot find an old fact hidden among many chat sessions—including updates and “not enough information” questions?</p>
+        </article>
+        <article class="exam">
+          <div class="big">🗓️</div>
+          <h3>LoCoMo</h3>
+          <p>Can it remember people, dates, details, and links across a long conversation?</p>
+        </article>
+        <article class="exam">
+          <div class="big">🎯</div>
+          <h3>BEAM</h3>
+          <p>Can it handle ten different memory skills such as ordering, updates, preferences, summaries, and contradictions?</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Now we have three exam sizes</h2>
+        <p>The middle one is more representative. The small one is still the fastest.</p>
+      </div>
+      <div class="tiers">
+        <article class="tier smoke">
+          <div class="label">Smoke</div>
+          <div class="number">22</div>
+          <div class="size">questions · 479 KB</div>
+          <p>Touches every skill once. Great for catching broken pipes and big regressions.</p>
+          <div class="calls">66 measured answer-side calls</div>
+        </article>
+        <article class="tier signal">
+          <div class="label">Signal</div>
+          <div class="number">90</div>
+          <div class="size">questions · 7.99 MB</div>
+          <p>At least three examples per skill, several conversations, and much fuller context.</p>
+          <div class="calls">836 expected answer-side calls</div>
+        </article>
+        <article class="tier full">
+          <div class="label">Full</div>
+          <div class="number">2,886</div>
+          <div class="size">questions · 285.62 MB</div>
+          <p>The real final exam. Slow and expensive, so we save it for the end.</p>
+          <div class="calls">Official final reporting</div>
+        </article>
+      </div>
+      <div class="plain-note">
+        <div class="icon">⚖️</div>
+        <p><strong>Honest wording:</strong> signal is much more representative than smoke, but it still cannot promise the same score as all 2,886 questions.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Where things stand now</h2>
+        <p>The machine works; the next unanswered question is how well it scores on the new signal tier.</p>
+      </div>
+      <div class="status-board">
+        <article class="status-card">
+          <h3>✅ What is solid</h3>
+          <div class="checks">
+            <div class="check"><span>✓</span><p>Adaptive story notes + exact fact cards work end to end.</p></div>
+            <div class="check"><span>✓</span><p>Qwen 1.7B and 4B are installed and verified locally.</p></div>
+            <div class="check"><span>✓</span><p>Smoke and signal datasets regenerate exactly the same way.</p></div>
+            <div class="check"><span>✓</span><p>Wrong data/model combinations are rejected before results mix.</p></div>
+            <div class="check"><span>✓</span><p>44 automated checks pass; independent review found no important issue.</p></div>
+          </div>
+        </article>
+        <article class="status-card">
+          <h3>📊 Measured smoke scores</h3>
+          <div class="score-row"><span>LongMemEval</span><strong>71.43%</strong></div>
+          <div class="score-row"><span>LoCoMo</span><strong>0.400 F1</strong></div>
+          <div class="score-row"><span>BEAM</span><strong>0.4267</strong></div>
+          <div class="warning">These are Luna smoke-test scores—not final benchmark claims. The new 90-question adaptive signal run has not been measured yet.</div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>The sensible path from here</h2>
+        <p>Small check first. Bigger check second. Giant exam last.</p>
+      </div>
+      <div class="next-flow">
+        <article class="next-box">
+          <div style="font-size:38px">⚡</div>
+          <h3>1. Iterate</h3>
+          <p>Use Qwen 1.7B on the 22-question smoke tier after everyday changes.</p>
+        </article>
+        <div class="arrow">→</div>
+        <article class="next-box">
+          <div style="font-size:38px">🔬</div>
+          <h3>2. Compare</h3>
+          <p>Use Qwen 4B or Luna on the 90-question signal tier before the final run.</p>
+        </article>
+        <div class="arrow">→</div>
+        <article class="next-box">
+          <div style="font-size:38px">🏁</div>
+          <h3>3. Prove</h3>
+          <p>Run all 2,886 questions once the system is stable, then report those results.</p>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      This is a simplified analogy. “Robot,” “notebook,” and “exam” mean model, memory system, and benchmark.
+    </footer>
+  </main>
+</body>
+</html>

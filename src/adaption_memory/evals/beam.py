@@ -29,7 +29,8 @@ from json_repair import repair_json
 from scipy.stats import kendalltau
 from tqdm import tqdm
 
-from adaption_memory.evals.common import append_jsonl, done_ids, read_jsonl, write_summary
+from adaption_memory.evals.common import (add_usage, append_jsonl, done_ids,
+                                          read_jsonl, usage_delta, write_summary)
 from adaption_memory.interface import Session, Turn
 from adaption_memory.llm import LLM
 
@@ -77,6 +78,11 @@ def question_id(conv_id: str, qtype: str, qi: int) -> str:
 
 def oracle_answer(q: dict) -> str:
     """Gold text for --system oracle; the gold field name varies by type."""
+    # event_ordering_tau interprets one event per line. The prose `answer`
+    # contains the same events in a single paragraph, which would make a gold
+    # oracle look unordered to the official alignment path.
+    if q.get("ordering_tested"):
+        return "\n".join(q["rubric"])
     for key in ("ideal_response", "ideal_answer", "ideal_summary", "answer",
                 "expected_compliance"):
         if q.get(key):
@@ -94,19 +100,26 @@ def run_answers(make_system, conversations: list[dict], out_path: Path,
                 if question_id(conv["conversation_id"], qtype, qi) not in done]
         if not todo:
             continue
+        write_usage = {}
         if not oracle:
             system = make_system()
             system.reset()
+            before_ingest = system.usage()
             for session in sessions_of(conv):
                 system.ingest(session)
+            write_usage = usage_delta(before_ingest, system.usage())
+            prefix = f'{conv["conversation_id"]}:'
+            if any(qid.startswith(prefix) for qid in done):
+                write_usage = {}
         for qtype, qi, q in tqdm(todo, desc=f'beam:conv{conv["conversation_id"]}'):
             if oracle:
                 hyp, usage = oracle_answer(q), {}
             else:
-                before = system.llm.usage.snapshot()
+                before = system.usage()
                 hyp = system.answer(q["question"])
-                after = system.llm.usage.snapshot()
-                usage = {k: after[k] - before[k] for k in after}
+                after = system.usage()
+                usage = add_usage(write_usage, usage_delta(before, after))
+                write_usage = {}
             append_jsonl(out_path, {
                 "question_id": question_id(conv["conversation_id"], qtype, qi),
                 "question_type": qtype, "hypothesis": hyp, "usage": usage})
@@ -122,7 +135,7 @@ def parse_judge_json(response: str) -> dict:
 
 
 def judge_rubric(judge: LLM, question: str, rubric: list[str],
-                 hypothesis: str) -> dict:
+                 hypothesis: str, max_tokens: int = 500) -> dict:
     responses, score = [], 0.0
     for item in rubric:
         prompt = (UNIFIED_JUDGE_PROMPT
@@ -130,7 +143,7 @@ def judge_rubric(judge: LLM, question: str, rubric: list[str],
                   .replace("<rubric_item>", item)
                   .replace("<llm_response>", hypothesis))
         parsed = parse_judge_json(judge.chat(
-            [{"role": "user", "content": prompt}], max_tokens=500))
+            [{"role": "user", "content": prompt}], max_tokens=max_tokens))
         try:
             score += float(parsed.get("score", 0.0))
         except (TypeError, ValueError):
@@ -149,24 +162,26 @@ EQUIVALENCE_SYSTEM_MSG = """
         """
 
 
-def llm_equivalence(judge: LLM, first: str, second: str) -> bool:
+def llm_equivalence(judge: LLM, first: str, second: str,
+                    max_tokens: int = 10) -> bool:
     resp = judge.chat([
         {"role": "system", "content": EQUIVALENCE_SYSTEM_MSG},
         {"role": "user", "content": f"""First snippet: {first} \n
                        Second snippet: {second}
                     """},
-    ], max_tokens=10)
+    ], max_tokens=max_tokens)
     return "yes" in resp.lower()
 
 
-def align_with_llm(judge: LLM, reference: list[str], system: list[str]):
+def align_with_llm(judge: LLM, reference: list[str], system: list[str],
+                   max_tokens: int = 10):
     used, system_out = set(), []
     for s in system:
         matched = None
         for idx, r in enumerate(reference):
             if idx in used:
                 continue
-            if llm_equivalence(judge, r, s):
+            if llm_equivalence(judge, r, s, max_tokens=max_tokens):
                 matched = idx
                 break
         if matched is not None:
@@ -177,11 +192,14 @@ def align_with_llm(judge: LLM, reference: list[str], system: list[str]):
     return reference, system_out
 
 
-def event_ordering_tau(judge: LLM, rubric: list[str], hypothesis: str) -> float:
+def event_ordering_tau(judge: LLM, rubric: list[str], hypothesis: str,
+                       max_tokens: int = 10) -> float:
     system_list = [line for line in hypothesis.split("\n") if line.strip()]
     if not system_list:
         return 0.0
-    reference_canon, system_canon = align_with_llm(judge, rubric, system_list)
+    reference_canon, system_canon = align_with_llm(
+        judge, rubric, system_list, max_tokens=max_tokens
+    )
     union = list(dict.fromkeys(reference_canon + system_canon))
     tie_rank = len(union) + 1
 
@@ -195,7 +213,7 @@ def event_ordering_tau(judge: LLM, rubric: list[str], hypothesis: str) -> float:
 
 
 def run_judge(judge: LLM, conversations: list[dict], hyp_path: Path,
-              out_path: Path) -> None:
+              out_path: Path, max_tokens: int = 500) -> None:
     questions = {}
     for conv in conversations:
         for qtype in QUESTION_TYPES:
@@ -207,10 +225,14 @@ def run_judge(judge: LLM, conversations: list[dict], hyp_path: Path,
         if qid in done or qid not in questions:
             continue
         q = questions[qid]
-        result = judge_rubric(judge, q["question"], q["rubric"], h["hypothesis"])
+        result = judge_rubric(
+            judge, q["question"], q["rubric"], h["hypothesis"],
+            max_tokens=max_tokens,
+        )
         if h["question_type"] == "event_ordering":
             result["tau_norm"] = event_ordering_tau(judge, q["rubric"],
-                                                    h["hypothesis"])
+                                                    h["hypothesis"],
+                                                    max_tokens=max_tokens)
         append_jsonl(out_path, {"question_id": qid,
                                 "question_type": h["question_type"], **result})
 

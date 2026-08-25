@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "format": "F4",
+  "prompt_revision": "coverage",
+  "source_run": "results/overnight/signal/luna-target/F4-dev-coverage",
+  "input_pairs": 488,
+  "accepted_pairs": 374,
+  "rejected_pairs": 114,
+  "rejection_rate": 0.2336,
+  "training_started": false
+}

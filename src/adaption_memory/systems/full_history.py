@@ -24,6 +24,9 @@ class FullHistorySystem:
     def reset(self) -> None:
         self.sessions = []
 
+    def usage(self) -> dict:
+        return self.llm.usage.snapshot()
+
     def ingest(self, session: Session) -> None:
         self.sessions.append(session)
 

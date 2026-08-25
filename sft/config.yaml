@@ -1,0 +1,22 @@
+model: Qwen/Qwen3-4B
+method: lora
+lora:
+  rank: 64
+  alpha: 128
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+training:
+  epochs: 3
+  learning_rate: 0.0001
+  lr_schedule: cosine
+  mixture:
+    memory_extraction_percent: 90
+    general_purpose_percent: 10
+    note: Add general-purpose examples before training.
+data:
+  train: northstar-style/train.jsonl
+  format: F4
+  prompt_revision: coverage
