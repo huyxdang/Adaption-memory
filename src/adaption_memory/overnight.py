@@ -313,7 +313,7 @@ def supersession_rank_ok(system: WriteTimeMemorySystem, category: str) -> bool |
 
 def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             format_name: str = "F1", split_name: str | None = None,
-            prompt_revision: str = "base",
+            prompt_revision: str = "base", emission: str = "pointer",
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
@@ -321,17 +321,24 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
         raise ValueError("full tier is intentionally unsupported")
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
-    if prompt_revision not in {"base", "coverage", "validated"}:
+    if prompt_revision not in {"base", "coverage", "validated", "coverage-f1"}:
         raise ValueError(f"unknown extractor prompt: {prompt_revision}")
-    if prompt_revision != "base" and format_name != "F4":
+    if prompt_revision in {"coverage", "validated"} and format_name != "F4":
         raise ValueError("optimized prompts are defined only for F4")
+    if prompt_revision == "coverage-f1" and format_name != "F1":
+        raise ValueError("coverage-f1 is defined only for F1")
+    if emission not in {"pointer", "simple"}:
+        raise ValueError("run_arm supports the pointer and simple emissions")
     arm_config = ARMS[arm]
     run_name = format_name if split_name is None else f"{format_name}-{split_name}"
     if prompt_revision != "base":
         run_name = f"{run_name}-{prompt_revision}"
+    if emission != "pointer":
+        run_name = f"{run_name}-{emission}"
     run_root = RESULTS / "overnight" / tier / arm / run_name
     overall = {"tier": tier, "arm": arm, "format": format_name,
                "split": split_name, "prompt_revision": prompt_revision,
+               "emission": emission,
                "inference": {
                    "revision": (
                        LOCAL_INFERENCE_REVISION
@@ -381,8 +388,10 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
                 extractor_llm=extractor_llm, answer_llm=answer_llm,
                 store_path=benchmark_dir / "stores" / f"{safe_name(conversation.id)}.sqlite3",
                 checkpoint_dir=benchmark_dir,
-                arm=arm, fewshot=arm_config["fewshot"], format_name=format_name,
-                prompt_revision=prompt_revision,
+                arm=arm,
+                fewshot=arm_config["fewshot"] and emission == "pointer",
+                format_name=format_name,
+                prompt_revision=prompt_revision, emission=emission,
                 retrieval_k=retrieval_k, dense_weight=dense_weight,
                 bm25_weight=bm25_weight, demotion_factor=demotion_factor,
             )
@@ -931,7 +940,10 @@ def main() -> None:
     run_parser.add_argument("--format", default="F1", choices=["F1", "F2", "F3", "F4"])
     run_parser.add_argument("--split", choices=["dev", "holdout"])
     run_parser.add_argument("--extractor-prompt", default="base",
-                            choices=["base", "coverage", "validated"])
+                            choices=["base", "coverage", "validated",
+                                     "coverage-f1"])
+    run_parser.add_argument("--emission", default="pointer",
+                            choices=["pointer", "simple"])
     run_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
     fast_parser = subparsers.add_parser(
         "fastloop",
@@ -975,6 +987,7 @@ def main() -> None:
                 tier=args.tier, arm=args.arm, tracker=tracker,
                 format_name=args.format, split_name=args.split,
                 prompt_revision=args.extractor_prompt,
+                emission=args.emission,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
             )
         elif args.command == "fastloop":
