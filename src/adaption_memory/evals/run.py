@@ -36,7 +36,7 @@ TIER_DATA_FILES = {
         "locomo": f"data/mini/{tier}/locomo.json",
         "beam": f"data/mini/{tier}/beam.parquet",
     }
-    for tier in ("smoke", "signal")
+    for tier in ("smoke", "signal", "half")
 }
 
 RESULT_ARTIFACTS = ("answers.jsonl", "judged.jsonl", "summary.json")

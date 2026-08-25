@@ -100,8 +100,9 @@ def load_local_env(path: Path = ROOT / ".env.local") -> None:
 
 
 def load_conversations(tier: str, benchmark: str) -> list[Conversation]:
-    if tier not in {"smoke", "signal"}:
-        raise ValueError("overnight runs are restricted to smoke and signal")
+    if tier not in {"smoke", "signal", "half"}:
+        raise ValueError(
+            "supported tiers: smoke, signal, and the user-authorized half")
     if benchmark == "longmemeval":
         instances = longmemeval.load_instances(DATA / tier / "longmemeval.json")
         return [Conversation(
@@ -323,8 +324,9 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
-    if tier not in {"smoke", "signal"}:
-        raise ValueError("full tier is intentionally unsupported")
+    if tier not in {"smoke", "signal", "half"}:
+        raise ValueError("full tier is intentionally unsupported; half is "
+                         "the authorized ceiling")
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
     if prompt_revision not in {"base", "coverage", "validated", "coverage-f1",
@@ -991,7 +993,8 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("preflight")
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--tier", required=True, choices=["smoke", "signal"])
+    run_parser.add_argument("--tier", required=True,
+                            choices=["smoke", "signal", "half"])
     run_parser.add_argument("--arm", required=True, choices=sorted(ARMS))
     run_parser.add_argument("--format", default="F1", choices=["F1", "F2", "F3", "F4"])
     run_parser.add_argument("--split", choices=["dev", "holdout"])
