@@ -331,8 +331,9 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
         raise ValueError("optimized prompts are defined only for F4")
     if prompt_revision == "coverage-f1" and format_name != "F1":
         raise ValueError("coverage-f1 is defined only for F1")
-    if emission not in {"pointer", "simple"}:
-        raise ValueError("run_arm supports the pointer and simple emissions")
+    if emission not in {"pointer", "simple", "replaces"}:
+        raise ValueError(
+            "run_arm supports the pointer, simple, and replaces emissions")
     arm_config = ARMS[arm]
     run_name = format_name if split_name is None else f"{format_name}-{split_name}"
     if prompt_revision != "base":
@@ -983,7 +984,7 @@ def main() -> None:
                             choices=["base", "coverage", "validated",
                                      "coverage-f1"])
     run_parser.add_argument("--emission", default="pointer",
-                            choices=["pointer", "simple"])
+                            choices=["pointer", "simple", "replaces"])
     run_parser.add_argument("--workers", type=int, default=3)
     run_parser.add_argument("--extract-only", action="store_true",
                             help="run the local write path only; skip hosted "
@@ -1000,7 +1001,8 @@ def main() -> None:
                              choices=["base", "coverage", "validated",
                                       "coverage-f1"])
     fast_parser.add_argument("--emission", default="pointer",
-                             choices=["pointer", "simple", "lines"])
+                             choices=["pointer", "simple", "lines",
+                                      "replaces"])
     fast_parser.add_argument("--granularity", default="session",
                              choices=["session", "interaction"])
     fast_parser.add_argument("--local-thinking", action="store_true")

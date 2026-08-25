@@ -15,6 +15,7 @@ from adaption_memory.llm import LLM
 from adaption_memory.memory.checkpoint import Checkpoint, replay_usage, stable_hash
 from adaption_memory.memory.embedding import LocalEmbedder
 from adaption_memory.memory.prompts import (LINES_EMISSION_INSTRUCTION,
+                                             REPLACES_EMISSION_INSTRUCTION,
                                              SIMPLE_EMISSION_INSTRUCTION,
                                              extraction_schema,
                                              fewshot_messages,
@@ -88,7 +89,7 @@ class MemoryExtractor:
                  format_name: str = "F1", arm: str = "luna-target",
                  prompt_revision: str = "base", emission: str = "pointer",
                  local_thinking: bool = False):
-        if emission not in {"pointer", "simple", "lines"}:
+        if emission not in {"pointer", "simple", "lines", "replaces"}:
             raise ValueError(f"unknown emission: {emission}")
         if emission != "pointer" and fewshot:
             raise ValueError("simple/lines emissions run zero-shot; the "
@@ -182,6 +183,8 @@ class MemoryExtractor:
         system_prompt = production_prompt(self.format_name, self.prompt_revision)
         if self.emission == "simple":
             system_prompt += SIMPLE_EMISSION_INSTRUCTION
+        elif self.emission == "replaces":
+            system_prompt += REPLACES_EMISSION_INSTRUCTION
         elif self.emission == "lines":
             system_prompt += LINES_EMISSION_INSTRUCTION
         if self.local_qwen:
@@ -330,6 +333,9 @@ class MemoryExtractor:
             return None
         if self.emission == "simple":
             return simple_extraction_schema(max_records=self.max_records)
+        if self.emission == "replaces":
+            return simple_extraction_schema(max_records=self.max_records,
+                                            link_field="replaces")
         return extraction_schema(
             self.format_name, max_records=self.max_records,
             compact=self.local_qwen,
@@ -362,15 +368,67 @@ class MemoryExtractor:
             })
         return resolved
 
+    def _resolve_replaces(self, items: list[dict]) -> list[dict]:
+        """Map 'replaces: <restated candidate text>' onto supersedes_id by
+        matching against the candidates shown in this call. Exact normalized
+        match first, then best token overlap (>= 0.6). Ties prefer a
+        candidate that is not itself superseded, then the later-listed one.
+        An unmatched replaces keeps the fact and drops the link."""
+        superseded_ids = {record.supersedes_id
+                          for record in self._shown_candidates
+                          if record.supersedes_id}
+
+        def tokens(text: str) -> set[str]:
+            return {token for token in
+                    regex.findall(r"[\p{L}\p{N}']+", text.lower())
+                    if len(token) > 1}
+
+        def match(target: str) -> str | None:
+            wanted = " ".join(target.lower().split())
+            scored = []
+            for index, record in enumerate(self._shown_candidates):
+                content = " ".join(str(record.content).lower().split())
+                if content == wanted:
+                    overlap = 1.01
+                else:
+                    a, b = tokens(target), tokens(str(record.content))
+                    union = a | b
+                    overlap = len(a & b) / len(union) if union else 0.0
+                active = record.id not in superseded_ids
+                scored.append((overlap, active, index, record.id))
+            if not scored:
+                return None
+            overlap, active, index, record_id = max(scored)
+            return record_id if overlap >= 0.6 else None
+
+        resolved = []
+        for item in items:
+            target = item.pop("replaces", None)
+            supersedes_id = None
+            unmatched = False
+            if isinstance(target, str) and target.strip():
+                supersedes_id = match(target)
+                unmatched = supersedes_id is None
+            content = item.get("content") or ""
+            resolved.append({
+                "type": item.get("type"),
+                "content": content,
+                "entities": derive_entities(str(content)),
+                "supersedes_id": supersedes_id,
+                "_replaces_unmatched": unmatched,
+            })
+        return resolved
+
     def _parse_emission(self, raw: str) -> tuple[dict, dict | None]:
         if self.emission == "pointer":
             return self._parse(raw, compact=self.local_qwen)
-        if self.emission == "simple":
+        if self.emission in {"simple", "replaces"}:
             parsed, error = self._parse(raw, compact=False)
             items = parsed.get("records", []) if isinstance(parsed, dict) else []
-            return {"records": self._resolve_updates(
-                [item for item in items if isinstance(item, dict)]
-            )}, error
+            items = [item for item in items if isinstance(item, dict)]
+            if self.emission == "replaces":
+                return {"records": self._resolve_replaces(items)}, error
+            return {"records": self._resolve_updates(items)}, error
         # lines
         text = raw.strip()
         if text.startswith("<think>") and "</think>" in text:

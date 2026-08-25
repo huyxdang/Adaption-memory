@@ -110,6 +110,17 @@ candidate's fact with newer information; otherwise use null. Do not output
 ids or entities.
 """
 
+REPLACES_EMISSION_INSTRUCTION = """
+
+Output format override — restate what you replace:
+Candidate memories are shown as a numbered list. Return JSON only:
+{"records": [{"type": "narrative"|"atomic", "content": "...",
+              "replaces": "<the replaced candidate's text>" or null}]}
+When this record updates or corrects a shown candidate memory, copy that
+candidate's text into replaces (verbatim or near-verbatim); otherwise use
+null. Do not output ids or entities.
+"""
+
 LINES_EMISSION_INSTRUCTION = """
 
 Output format override — plain lines, no JSON:
@@ -285,9 +296,15 @@ def _format_example_output(example: dict, format_name: str) -> dict:
     return output
 
 
-def simple_extraction_schema(max_records: int | None = None) -> dict:
-    """Schema for the 'simple' emission: two content fields plus a numbered
-    updates pointer, mapped back to full F1 records by the extractor."""
+def simple_extraction_schema(max_records: int | None = None,
+                             link_field: str = "updates") -> dict:
+    """Schema for the 'simple' and 'replaces' emissions: two content fields
+    plus one supersession link — a candidate number ("updates") or the
+    replaced candidate's restated text ("replaces") — mapped back to full
+    F1 records by the extractor."""
+    link = ({"anyOf": [{"type": "integer"}, {"type": "null"}]}
+            if link_field == "updates"
+            else {"anyOf": [{"type": "string"}, {"type": "null"}]})
     records_schema = {
         "type": "array",
         "items": {
@@ -296,9 +313,9 @@ def simple_extraction_schema(max_records: int | None = None) -> dict:
             "properties": {
                 "type": {"type": "string", "enum": ["narrative", "atomic"]},
                 "content": {"type": "string"},
-                "updates": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                link_field: link,
             },
-            "required": ["type", "content", "updates"],
+            "required": ["type", "content", link_field],
         },
     }
     if max_records is not None:

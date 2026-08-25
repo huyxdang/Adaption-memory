@@ -516,3 +516,49 @@ def test_simple_emission_tolerates_malformed_updates(tmp_path):
         {"Rent is $900.", "Lease ends 2026-09-01."}
     assert all(record.supersedes_id is None for record in result.records)
     store.close()
+
+
+def test_replaces_emission_exact_and_fuzzy_match(tmp_path):
+    old = make_record("old-1", "Huy has 5 dogs.", value=0)
+    other = make_record("old-2", "Huy lives in Hanoi.", value=1)
+    raw = json.dumps({"records": [
+        {"type": "atomic", "content": "Huy has 4 dogs.",
+         "replaces": "Huy has 5 dogs."},
+        {"type": "atomic", "content": "Huy moved to Hue on 2026-02-02.",
+         "replaces": "huy lives in hanoi"},
+        {"type": "narrative", "content": "Huy adopted a rescue dog.",
+         "replaces": "Huy plays tennis weekly."},
+    ]})
+    extractor, store = _make_extractor(tmp_path, "replaces", raw,
+                                       [old, other])
+    result = extractor.extract(Session("s9", None, [
+        Turn("user", "Huy has 4 dogs now. He moved to Hue on 2026-02-02 "
+                     "and adopted a rescue dog."),
+    ]))
+    by_content = {record.content: record for record in result.records}
+    assert by_content["Huy has 4 dogs."].supersedes_id == "old-1"
+    assert by_content["Huy moved to Hue on 2026-02-02."].supersedes_id == "old-2"
+    # unmatched replaces keeps the fact, drops the link
+    assert by_content["Huy adopted a rescue dog."].supersedes_id is None
+    store.close()
+
+
+def test_replaces_tiebreak_prefers_active_candidate(tmp_path):
+    stale = make_record("gen1", "Huy has 4 dogs.", value=0)
+    current = make_record("gen3", "Huy has 4 dogs.", value=1)
+    bridge = make_record("gen2", "Huy has 5 dogs.", supersedes_id="gen1",
+                         value=2)
+    current = make_record("gen3", "Huy has 4 dogs.", supersedes_id="gen2",
+                          value=1)
+    raw = json.dumps({"records": [
+        {"type": "atomic", "content": "Huy has 6 dogs.",
+         "replaces": "Huy has 4 dogs."},
+    ]})
+    extractor, store = _make_extractor(tmp_path, "replaces", raw,
+                                       [stale, bridge, current])
+    result = extractor.extract(Session("s9", None, [
+        Turn("user", "Huy has 6 dogs."),
+    ]))
+    # both gen1 and gen3 say "4 dogs"; gen1 is superseded, gen3 is active
+    assert result.records[0].supersedes_id == "gen3"
+    store.close()
