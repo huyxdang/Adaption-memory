@@ -42,9 +42,32 @@ The records are listed in chronological order, oldest first; use that order
 and the record dates to reason about sequences, changes, and durations.
 """
 
+CHRONO_V2_ANSWER_PROMPT = ANSWER_SYSTEM_PROMPT + """
+The records are listed in chronological order, oldest first; use that order
+and the record dates to reason about sequences, changes, and durations.
+Records are labeled: a record marked SUPERSEDED carries an outdated value —
+never use it to answer a present-tense question; the record that replaced it
+carries the current value. Use SUPERSEDED records only for questions about
+an earlier state or about what changed.
+Some answers require combining several records (counting items, summing
+amounts, or connecting facts across sessions). Before answering "No
+information available", check whether records mentioning the question's
+people, places, or things can be combined into the answer.
+"""
+
+CHRONO_V3_ANSWER_PROMPT = CHRONO_V2_ANSWER_PROMPT + """
+Records may contain relative time expressions exactly as spoken ("next
+month", "last week", "two years ago"). Resolve them against that record's
+own date (the at= field) before answering a when-question: a record dated
+September 2023 saying "next month" means October 2023. Answer with the
+resolved absolute date, not the relative phrase.
+"""
+
 ANSWER_PROMPTS = {"base": ANSWER_SYSTEM_PROMPT,
                   "type-aware": TYPE_AWARE_ANSWER_PROMPT,
-                  "chrono": CHRONO_ANSWER_PROMPT}
+                  "chrono": CHRONO_ANSWER_PROMPT,
+                  "chrono-v2": CHRONO_V2_ANSWER_PROMPT,
+                  "chrono-v3": CHRONO_V3_ANSWER_PROMPT}
 
 
 class MemoryAnswerer:
@@ -58,7 +81,8 @@ class MemoryAnswerer:
         self.arm = arm
         self.format_name = format_name
         self.system_prompt = ANSWER_PROMPTS[answer_revision]
-        self.chronological = answer_revision == "chrono"
+        self.chronological = answer_revision.startswith("chrono")
+        self.mark_superseded = answer_revision in {"chrono-v2", "chrono-v3"}
         self._usage_replayed: set[str] = set()
 
     def answer(self, question: str, records: list[Retrieved],
@@ -67,7 +91,8 @@ class MemoryAnswerer:
         if self.chronological:
             records = sorted(records,
                              key=lambda item: item.record.created_at or "")
-        rendered = self.render(records)
+        rendered = (self.render_marked(records) if self.mark_superseded
+                    else self.render(records))
         user_parts = ["<memory>", rendered, "</memory>"]
         if question_date:
             user_parts.append(f"Question date: {question_date}")
@@ -101,6 +126,30 @@ class MemoryAnswerer:
             "usage": usage_delta(usage_before, self.llm.usage.snapshot()),
         })
         return answer, input_hash
+
+    @staticmethod
+    def render_marked(records: list[Retrieved]) -> str:
+        """Label stale records explicitly: the plain render marks only the
+        superseding side of a chain, leaving the outdated record labeled
+        "new" — which is exactly backwards for the reader."""
+        if not records:
+            return "(no records retrieved)"
+        superseded_by = {item.record.supersedes_id: item.record.id
+                         for item in records if item.record.supersedes_id}
+        lines = []
+        for item in records:
+            record = item.record
+            if record.id in superseded_by:
+                status = f"SUPERSEDED by {superseded_by[record.id]}"
+            elif record.supersedes_id:
+                status = f"current; replaces {record.supersedes_id}"
+            else:
+                status = "current"
+            lines.append(
+                f"- [{record.id}; type={record.type}; at={record.created_at}; "
+                f"{status}] {record.content}"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def render(records: list[Retrieved]) -> str:

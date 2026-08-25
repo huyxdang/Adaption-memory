@@ -13,6 +13,11 @@ from adaption_memory.memory.checkpoint import Checkpoint, stable_hash
 from adaption_memory.memory.embedding import LocalEmbedder
 from adaption_memory.memory.store import MemoryStore, Record
 
+AGGREGATION_CUES = regex.compile(
+    r"\b(how many|how much|how often|total|altogether|in all|count|"
+    r"sum|combined|overall|number of|times did|times has)\b", regex.I)
+AGGREGATION_K = 24
+
 
 @dataclass(frozen=True)
 class Retrieved:
@@ -34,9 +39,11 @@ class HybridRetriever:
     def __init__(self, store: MemoryStore, embedder: LocalEmbedder,
                  checkpoint_path: str | Path, *, k: int = 12,
                  dense_weight: float = 1.0, bm25_weight: float = 1.0,
-                 demotion_factor: float = 0.3, format_name: str = "F1"):
+                 demotion_factor: float = 0.3, format_name: str = "F1",
+                 adaptive_k: bool = False):
         if not 1 <= k <= 64:
             raise ValueError("retrieval k must be between 1 and 64")
+        self.adaptive_k = adaptive_k
         self.store = store
         self.embedder = embedder
         self.checkpoint = Checkpoint(checkpoint_path)
@@ -47,11 +54,17 @@ class HybridRetriever:
         self.format_name = format_name
 
     def retrieve(self, query: str) -> list[Retrieved]:
+        # Aggregation questions ("how many…", "total…") need every matching
+        # piece in context, not just the top-k most similar; blanket k=20
+        # measured worse on ordinary questions, so widen only on cue.
+        k = self.k
+        if self.adaptive_k and AGGREGATION_CUES.search(query):
+            k = max(self.k, AGGREGATION_K)
         records = self.store.all()
         state_hash = stable_hash([record.as_dict() for record in records])
         input_hash = stable_hash({
             "schema": 1, "query": query, "state_hash": state_hash,
-            "k": self.k, "dense_weight": self.dense_weight,
+            "k": k, "dense_weight": self.dense_weight,
             "bm25_weight": self.bm25_weight,
             "demotion_factor": self.demotion_factor,
             "format": self.format_name,
@@ -101,7 +114,7 @@ class HybridRetriever:
             fused.append(Retrieved(record, score, dense_rank[index], bm25_rank[index]))
         fused.sort(key=lambda item: item.score, reverse=True)
 
-        selected = fused[:self.k]
+        selected = fused[:k]
         by_id = {item.record.id: item for item in fused}
         expanded = list(selected)
         selected_ids = {item.record.id for item in expanded}
@@ -115,7 +128,7 @@ class HybridRetriever:
         if self.format_name == "F3":
             entity_ids = {
                 entity.casefold()
-                for item in expanded[:self.k]
+                for item in expanded[:k]
                 for entity in item.record.entities
             }
             for item in fused:
@@ -128,7 +141,7 @@ class HybridRetriever:
             # Entity dossiers are bounded to avoid unbounded context growth.
             expanded = expanded[:max(self.k, 24)]
         else:
-            expanded = expanded[:self.k]
+            expanded = expanded[:k]
 
         self.checkpoint.append({
             "input_hash": input_hash, "query": query,

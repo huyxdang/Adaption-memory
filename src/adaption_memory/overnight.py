@@ -319,6 +319,7 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             prompt_revision: str = "base", emission: str = "pointer",
             workers: int = 3, extract_only: bool = False,
             answer_revision: str = "base", run_suffix: str = "",
+            adaptive_k: bool = False, multi_query: bool = False,
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
@@ -346,6 +347,10 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
         run_name = f"{run_name}-ans-{answer_revision}"
     if retrieval_k != 12:
         run_name = f"{run_name}-k{retrieval_k}"
+    if adaptive_k:
+        run_name = f"{run_name}-aggk"
+    if multi_query:
+        run_name = f"{run_name}-mq"
     if run_suffix:
         run_name = f"{run_name}-{run_suffix}"
     run_root = RESULTS / "overnight" / tier / arm / run_name
@@ -396,7 +401,8 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             fewshot=arm_config["fewshot"] and emission == "pointer",
             format_name=format_name,
             prompt_revision=prompt_revision, emission=emission,
-            answer_revision=answer_revision,
+            answer_revision=answer_revision, adaptive_k=adaptive_k,
+            multi_query=multi_query,
             retrieval_k=retrieval_k, dense_weight=dense_weight,
             bm25_weight=bm25_weight, demotion_factor=demotion_factor,
         )
@@ -996,8 +1002,14 @@ def main() -> None:
                             choices=["pointer", "simple", "replaces"])
     run_parser.add_argument("--workers", type=int, default=3)
     run_parser.add_argument("--answer-prompt", default="base",
-                            choices=["base", "type-aware", "chrono"])
+                            choices=["base", "type-aware", "chrono", "chrono-v2", "chrono-v3"])
     run_parser.add_argument("--retrieval-k", type=int, default=12)
+    run_parser.add_argument("--adaptive-k", action="store_true",
+                            help="widen retrieval to 24 on aggregation-cue "
+                                 "questions only")
+    run_parser.add_argument("--multi-query", action="store_true",
+                            help="retrieve with two model-written paraphrases "
+                                 "beside the original question")
     run_parser.add_argument("--run-suffix", default="",
                             help="isolate a rerun of identical params in its "
                                  "own directory (e.g. r2 for variance checks)")
@@ -1052,6 +1064,7 @@ def main() -> None:
                 extract_only=args.extract_only,
                 answer_revision=args.answer_prompt,
                 run_suffix=args.run_suffix,
+                adaptive_k=args.adaptive_k, multi_query=args.multi_query,
                 retrieval_k=args.retrieval_k,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
             )

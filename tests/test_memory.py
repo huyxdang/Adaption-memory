@@ -562,3 +562,65 @@ def test_replaces_tiebreak_prefers_active_candidate(tmp_path):
     # both gen1 and gen3 say "4 dogs"; gen1 is superseded, gen3 is active
     assert result.records[0].supersedes_id == "gen3"
     store.close()
+
+
+def test_marked_render_labels_stale_records():
+    from adaption_memory.memory.answer import MemoryAnswerer
+    from adaption_memory.memory.retrieve import Retrieved
+    old = make_record("old", "Sam lives in Hawaii.", value=0)
+    new = make_record("new", "Sam lives in Paris.", supersedes_id="old", value=1)
+    text = MemoryAnswerer.render_marked([
+        Retrieved(record=old, score=1.0, dense_rank=1, bm25_rank=1),
+        Retrieved(record=new, score=0.9, dense_rank=2, bm25_rank=2),
+    ])
+    assert "SUPERSEDED by new] Sam lives in Hawaii." in text
+    assert "current; replaces old] Sam lives in Paris." in text
+
+
+def test_adaptive_k_widens_only_on_aggregation_cues(tmp_path):
+    from adaption_memory.memory.retrieve import HybridRetriever
+    store = MemoryStore(tmp_path / "m.sqlite3")
+    for i in range(30):
+        store.add(make_record(f"r{i}", f"Sam went to festival number {i}.",
+                              value=i % 4))
+    retriever = HybridRetriever(store, FakeEmbedder(),
+                                tmp_path / "ret.jsonl", k=12, adaptive_k=True)
+    plain = retriever.retrieve("Where does Sam live?")
+    agg = retriever.retrieve("How many festivals did Sam attend in total?")
+    assert len(plain) <= 12
+    assert len(agg) > 12
+    store.close()
+
+
+def test_multi_query_unions_retrievals(tmp_path, monkeypatch):
+    from adaption_memory.memory import system as memory_system
+    monkeypatch.setattr(memory_system, "LocalEmbedder", FakeEmbedder)
+    from adaption_memory.memory.system import WriteTimeMemorySystem
+
+    class ExpandingLLM(FakeTrackedLLM):
+        model = "gpt-5.6-luna"
+        reasoning_effort = "none"
+        def chat(self, messages, **kw):
+            self.chat_calls += 1
+            self.usage.calls += 1
+            if "search queries" in messages[0]["content"]:
+                return "knee exercise\nswimming workout"
+            return "answer"
+
+    llm = ExpandingLLM("gpt-5.6-luna", "unused")
+    system = WriteTimeMemorySystem(
+        extractor_llm=FakeTrackedLLM("gpt-5.6-luna",
+                                     '{"records": []}'),
+        answer_llm=llm,
+        store_path=tmp_path / "s.sqlite3", checkpoint_dir=tmp_path,
+        arm="luna-target", fewshot=False, multi_query=True,
+    )
+    system.store.add(make_record("r1", "Sam swims for knee strength.", value=0))
+    system.store.add(make_record("r2", "Sam paints on Sundays.", value=1))
+    out = system.answer("What exercise helps the knee?")
+    assert out == "answer"
+    assert {i.record.id for i in system.last_retrieved} >= {"r1"}
+    # expansion cached: second identical question makes no new expansion call
+    calls_before = llm.chat_calls
+    system.answer("What exercise helps the knee?")
+    assert llm.chat_calls == calls_before  # answer + expansion both replayed
