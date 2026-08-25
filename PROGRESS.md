@@ -1559,3 +1559,49 @@
 **Blockers**
 
 - None.
+
+## Task: Extraction interface experiment campaign (autonomous)
+
+**Status:** complete
+**Started:** 2026-08-25 (evening)
+
+### 2026-08-25 - Emission/prompt/frequency grid run and judged
+
+**Status:** complete
+
+**Completed**
+
+- Added fastloop dimensions behind config-hashed run directories: emission
+  format (pointer / simple / lines), coverage-f1 prompt, per-interaction
+  granularity, local thinking mode, and a qwen3:1.7b arm. F1 storage
+  (narrative + atomic + supersession) unchanged in every non-ablation
+  config.
+- Added paraphrase-tolerant keyword coverage as the primary fastloop score
+  and a judge pipeline (packet dump + verdict apply) scored by Claude
+  Sonnet agents; validated the keyword metric against the judge at both
+  quality extremes.
+- Ran the grid on the full smoke suite locally and judged four
+  configurations end to end. Best: simple emission + coverage-f1 prompt
+  (judged 0.320 vs control 0.251; keyword 0.396 vs 0.232; rejections
+  50 -> 21, and 50 -> 2 for simple emission alone).
+- Recorded negative results with evidence: lines emission, thinking mode,
+  qwen3:1.7b extractor, and per-interaction frequency (parity at 14x cost).
+- Fixed the embedder to load offline from the local Hugging Face cache
+  after diagnosing fastloop failures as fastembed's start-up network
+  revalidation being reset by the corporate network.
+- Full write-up in EXTRACTION_EXPERIMENTS.md; all 72 tests pass.
+
+**Decisions**
+
+- The canonical run_arm path still uses the pointer emission: interface
+  promotion waits for the signal-tier >=3-point gate with hosted Luna,
+  per the reproduction invariant's decision rule.
+
+**Next**
+
+- Signal-tier confirmation of simple + coverage-f1 when hosted access
+  returns; re-run the Luna teacher arm with the simple emission.
+
+**Blockers**
+
+- Hosted models unreachable on the current network (hotspot away).

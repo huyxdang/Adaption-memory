@@ -17,7 +17,8 @@ class WriteTimeMemorySystem:
     def __init__(self, *, extractor_llm: LLM, answer_llm: LLM,
                  store_path: str | Path, checkpoint_dir: str | Path,
                  arm: str, fewshot: bool, format_name: str = "F1",
-                 prompt_revision: str = "base",
+                 prompt_revision: str = "base", emission: str = "pointer",
+                 local_thinking: bool = False,
                  retrieval_k: int = 12, dense_weight: float = 1.0,
                  bm25_weight: float = 1.0, demotion_factor: float = 0.3):
         checkpoint_dir = Path(checkpoint_dir)
@@ -30,7 +31,8 @@ class WriteTimeMemorySystem:
             extractor_llm, self.store, self.embedder,
             checkpoint_dir / "extractions.jsonl", fewshot=fewshot,
             format_name=format_name, arm=arm,
-            prompt_revision=prompt_revision,
+            prompt_revision=prompt_revision, emission=emission,
+            local_thinking=local_thinking,
         )
         self.retriever = HybridRetriever(
             self.store, self.embedder,

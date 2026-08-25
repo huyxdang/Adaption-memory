@@ -14,9 +14,12 @@ from adaption_memory.interface import Session
 from adaption_memory.llm import LLM
 from adaption_memory.memory.checkpoint import Checkpoint, replay_usage, stable_hash
 from adaption_memory.memory.embedding import LocalEmbedder
-from adaption_memory.memory.prompts import (extraction_schema,
+from adaption_memory.memory.prompts import (LINES_EMISSION_INSTRUCTION,
+                                             SIMPLE_EMISSION_INSTRUCTION,
+                                             extraction_schema,
                                              fewshot_messages,
-                                             production_prompt)
+                                             production_prompt,
+                                             simple_extraction_schema)
 from adaption_memory.memory.store import MemoryStore, Record
 
 
@@ -29,6 +32,29 @@ NUMBER_OR_DATE_TOKEN = regex.compile(
 LOCAL_MAX_RECORDS = 6
 LOCAL_MAX_TOKENS = 512
 LOCAL_INFERENCE_REVISION = "compact-v2"
+
+LINE_PATTERN = regex.compile(
+    r"^\s*(?:[-*]\s*)?(A|N)(?:\s+updates\s+(\d+))?\s*:\s*(.+?)\s*$",
+    regex.IGNORECASE,
+)
+ENTITY_STOPWORDS = {
+    "The", "A", "An", "In", "On", "At", "It", "He", "She", "They", "We",
+    "His", "Her", "Their", "This", "That", "These", "Those", "When", "After",
+    "Before", "During", "User", "Assistant", "Session", "I", "You",
+}
+
+
+def derive_entities(content: str, cap: int = 3) -> list[str]:
+    """Capitalized-token heuristic replacing model-emitted entities for the
+    simple/lines emissions; used only as a retrieval boost."""
+    seen = []
+    for token in regex.findall(r"\b\p{Lu}[\p{L}'-]+\b", content):
+        if token in ENTITY_STOPWORDS or token in seen:
+            continue
+        seen.append(token)
+        if len(seen) >= cap:
+            break
+    return seen
 LOCAL_OUTPUT_INSTRUCTION = f"""
 Local inference constraints:
 - Use the compact transport {{"r":[{{"t":type_code,"c":content,
@@ -60,7 +86,15 @@ class MemoryExtractor:
     def __init__(self, llm: LLM, store: MemoryStore, embedder: LocalEmbedder,
                  checkpoint_path: str | Path, *, fewshot: bool,
                  format_name: str = "F1", arm: str = "luna-target",
-                 prompt_revision: str = "base"):
+                 prompt_revision: str = "base", emission: str = "pointer",
+                 local_thinking: bool = False):
+        if emission not in {"pointer", "simple", "lines"}:
+            raise ValueError(f"unknown emission: {emission}")
+        if emission != "pointer" and fewshot:
+            raise ValueError("simple/lines emissions run zero-shot; the "
+                             "few-shot examples use the pointer format")
+        self.emission = emission
+        self.local_thinking = local_thinking
         self.llm = llm
         self.store = store
         self.embedder = embedder
@@ -70,7 +104,10 @@ class MemoryExtractor:
         self.arm = arm
         self.prompt_revision = prompt_revision
         self.local_qwen = llm.model.startswith("qwen3")
-        self.max_tokens = LOCAL_MAX_TOKENS if self.local_qwen else 1400
+        self.max_tokens = (
+            2048 if (self.local_qwen and local_thinking)
+            else LOCAL_MAX_TOKENS if self.local_qwen else 1400
+        )
         self.max_records = LOCAL_MAX_RECORDS if self.local_qwen else None
         self._usage_replayed: set[str] = set()
 
@@ -88,6 +125,8 @@ class MemoryExtractor:
             "fewshot": self.fewshot,
             "max_tokens": self.max_tokens,
             "max_records": self.max_records,
+            "emission": self.emission,
+            "thinking": self.local_thinking,
             "session_id": session.session_id,
             "session_date": session.date,
             "transcript": transcript,
@@ -113,26 +152,43 @@ class MemoryExtractor:
             )
         candidate_limit = 6 if self.local_qwen else 10
         candidates = self.store.candidates(transcript, k=candidate_limit)
-        if self.local_qwen:
+        self._shown_candidates = candidates
+        if self.emission != "pointer":
+            candidate_text = "\n".join(
+                f"{index + 1}. [{record.type}] {record.content} "
+                f"({record.created_at})"
+                for index, record in enumerate(candidates)
+            ) or "(none yet)"
+        elif self.local_qwen:
             type_codes = {"narrative": "n", "atomic": "a", "memory": "m"}
-            candidate_rows = [{
+            candidate_text = json.dumps([{
                 "i": record.id,
                 "t": type_codes[record.type],
                 "c": record.content,
                 "d": record.created_at,
-            } for record in candidates]
+            } for record in candidates], ensure_ascii=False)
         else:
-            candidate_rows = [record.as_dict() for record in candidates]
+            candidate_text = json.dumps(
+                [record.as_dict() for record in candidates],
+                ensure_ascii=False,
+            )
         user_input = (
             "Candidate memories:\n"
-            f"{json.dumps(candidate_rows, ensure_ascii=False)}\n\n"
+            f"{candidate_text}\n\n"
             f"Session id: {session.session_id}\n"
             f"Session date: {session.date or 'unknown'}\n"
             f"<session>\n{transcript}\n</session>"
         )
         system_prompt = production_prompt(self.format_name, self.prompt_revision)
+        if self.emission == "simple":
+            system_prompt += SIMPLE_EMISSION_INSTRUCTION
+        elif self.emission == "lines":
+            system_prompt += LINES_EMISSION_INSTRUCTION
         if self.local_qwen:
-            system_prompt = "/no_think\n" + system_prompt + LOCAL_OUTPUT_INSTRUCTION
+            prefix = "" if self.local_thinking else "/no_think\n"
+            suffix = (LOCAL_OUTPUT_INSTRUCTION
+                      if self.emission == "pointer" else "")
+            system_prompt = prefix + system_prompt + suffix
         input_hash = stable_hash({
             "schema": 3 if self.local_qwen else 2,
             "arm": self.arm,
@@ -142,6 +198,8 @@ class MemoryExtractor:
             "fewshot": self.fewshot,
             "max_tokens": self.max_tokens,
             "max_records": self.max_records,
+            "emission": self.emission,
+            "thinking": self.local_thinking,
             "system": system_prompt,
             "input": user_input,
         })
@@ -169,12 +227,9 @@ class MemoryExtractor:
         usage_before = self.llm.usage.snapshot()
         raw = self.llm.chat(
             messages, max_tokens=self.max_tokens,
-            response_format=extraction_schema(
-                self.format_name, max_records=self.max_records,
-                compact=self.local_qwen,
-            ),
+            response_format=self._response_format(),
         )
-        parsed, parse_error = self._parse(raw, compact=self.local_qwen)
+        parsed, parse_error = self._parse_emission(raw)
         valid, rejected = self._validate(
             parsed, transcript, {record.id for record in candidates}, session
         )
@@ -198,14 +253,9 @@ class MemoryExtractor:
             ]
             repaired_raw = self.llm.chat(
                 repair_messages, max_tokens=self.max_tokens,
-                response_format=extraction_schema(
-                    self.format_name, max_records=self.max_records,
-                    compact=self.local_qwen,
-                ),
+                response_format=self._response_format(),
             )
-            repaired_parsed, repaired_error = self._parse(
-                repaired_raw, compact=self.local_qwen
-            )
+            repaired_parsed, repaired_error = self._parse_emission(repaired_raw)
             repaired_valid, repaired_rejected = self._validate(
                 repaired_parsed, transcript,
                 {record.id for record in candidates}, session,
@@ -237,6 +287,8 @@ class MemoryExtractor:
             "session_fingerprint": session_fingerprint,
             "scope_id": self.store.path.stem,
             "arm": self.arm,
+            "emission": self.emission,
+            "thinking": self.local_thinking,
             "session_id": session.session_id,
             "format": self.format_name,
             "prompt_revision": self.prompt_revision,
@@ -272,6 +324,73 @@ class MemoryExtractor:
             input_hash=input_hash, records=records, rejected=rejected,
             schema_valid=not parse_error, repaired=repaired, input_text=user_input,
         )
+
+    def _response_format(self) -> dict | None:
+        if self.emission == "lines":
+            return None
+        if self.emission == "simple":
+            return simple_extraction_schema(max_records=self.max_records)
+        return extraction_schema(
+            self.format_name, max_records=self.max_records,
+            compact=self.local_qwen,
+        )
+
+    def _resolve_updates(self, items: list[dict]) -> list[dict]:
+        """Map 'updates: <1-based candidate number>' from the simple/lines
+        emissions onto supersedes_id, and derive entities from content."""
+        resolved = []
+        for item in items:
+            updates = item.pop("updates", None)
+            supersedes_id = None
+            if updates not in (None, ""):
+                try:
+                    index = int(updates) - 1
+                except (TypeError, ValueError):
+                    index = -1
+                if 0 <= index < len(self._shown_candidates):
+                    supersedes_id = self._shown_candidates[index].id
+                else:
+                    item["_updates_out_of_range"] = True
+            content = item.get("content") or ""
+            resolved.append({
+                "type": item.get("type"),
+                "content": content,
+                "entities": derive_entities(str(content)),
+                "supersedes_id": supersedes_id,
+                "_updates_out_of_range": item.get("_updates_out_of_range",
+                                                  False),
+            })
+        return resolved
+
+    def _parse_emission(self, raw: str) -> tuple[dict, dict | None]:
+        if self.emission == "pointer":
+            return self._parse(raw, compact=self.local_qwen)
+        if self.emission == "simple":
+            parsed, error = self._parse(raw, compact=False)
+            items = parsed.get("records", []) if isinstance(parsed, dict) else []
+            return {"records": self._resolve_updates(
+                [item for item in items if isinstance(item, dict)]
+            )}, error
+        # lines
+        text = raw.strip()
+        if text.startswith("<think>") and "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        items = []
+        for line in text.splitlines():
+            match = LINE_PATTERN.match(line)
+            if match is None:
+                continue
+            kind, updates, content = match.groups()
+            items.append({
+                "type": "atomic" if kind.upper() == "A" else "narrative",
+                "content": content,
+                "updates": int(updates) if updates else None,
+            })
+        if self.max_records is not None:
+            items = items[:self.max_records]
+        if not items and text and text.upper() != "NONE":
+            return {"records": []}, {"reason": "no parseable memory lines"}
+        return {"records": self._resolve_updates(items)}, None
 
     def _replay_checkpoint_usage(self, row: dict) -> None:
         input_hash = row["input_hash"]

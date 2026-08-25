@@ -416,3 +416,103 @@ def test_fastloop_runs_conversations_concurrently_and_isolated(tmp_path, monkeyp
     assert len(checkpoint_dirs) == 3
     stores = list((run_dir / "longmemeval" / "stores").glob("*.sqlite3"))
     assert len(stores) == 3
+
+
+def _make_extractor(tmp_path, emission, response, candidates=()):
+    from adaption_memory.memory.extract import MemoryExtractor
+    store = MemoryStore(tmp_path / f"{emission}.sqlite3")
+    for record in candidates:
+        store.add(record)
+    llm = FakeTrackedLLM("qwen3:4b", response)
+    extractor = MemoryExtractor(
+        llm, store, FakeEmbedder(), tmp_path / f"{emission}.jsonl",
+        fewshot=False, format_name="F1", arm="qwen3-4b-zeroshot",
+        emission=emission,
+    )
+    return extractor, store
+
+
+def test_lines_emission_parses_and_maps_updates(tmp_path):
+    old = make_record("old-1", "Noor lives in Hanoi on 2026-01-02.", value=0)
+    raw = ("A: Noor moved on 2026-03-01.\n"
+           "garbage line without a prefix\n"
+           "N updates 1: Noor relocated because her team moved.\n")
+    extractor, store = _make_extractor(tmp_path, "lines", raw, [old])
+    result = extractor.extract(Session("s2", "2026-03-02", [
+        Turn("user", "Noor moved on 2026-03-01. Her team moved."),
+    ]))
+    contents = {record.content: record for record in result.records}
+    assert "Noor moved on 2026-03-01." in contents
+    narrative = contents["Noor relocated because her team moved."]
+    assert narrative.type == "narrative"
+    assert narrative.supersedes_id == "old-1"
+    assert narrative.entities == ["Noor"]
+    store.close()
+
+
+def test_simple_emission_maps_numbered_updates(tmp_path):
+    old = make_record("old-9", "Noor lives in Hanoi.", value=0)
+    raw = json.dumps({"records": [
+        {"type": "atomic", "content": "Noor lives in Da Nang.", "updates": 1},
+        {"type": "atomic", "content": "Meeting on 2026-05-05.", "updates": 7},
+    ]})
+    extractor, store = _make_extractor(tmp_path, "simple", raw, [old])
+    result = extractor.extract(Session("s2", None, [
+        Turn("user", "Noor lives in Da Nang now. Meeting on 2026-05-05."),
+    ]))
+    by_content = {record.content: record for record in result.records}
+    assert by_content["Noor lives in Da Nang."].supersedes_id == "old-9"
+    # out-of-range updates keeps the fact but drops the link
+    assert by_content["Meeting on 2026-05-05."].supersedes_id is None
+    store.close()
+
+
+def test_lines_emission_none_output(tmp_path):
+    extractor, store = _make_extractor(tmp_path, "lines", "NONE")
+    result = extractor.extract(Session("s1", None, [Turn("user", "hi")]))
+    assert result.records == [] and result.schema_valid
+    store.close()
+
+
+def test_derive_entities_skips_stopwords():
+    from adaption_memory.memory.extract import derive_entities
+    assert derive_entities("The team met Audrey and Andrew in Hanoi today.") \
+        == ["Audrey", "Andrew", "Hanoi"]
+
+
+def test_interaction_chunks_preserve_order():
+    from adaption_memory.overnight import interaction_chunks
+    session = Session("s7", "2026-01-01",
+                      [Turn("user", f"t{i}") for i in range(5)])
+    chunks = interaction_chunks(session)
+    assert [c.session_id for c in chunks] == ["s7#i0", "s7#i1", "s7#i2"]
+    assert [len(c.turns) for c in chunks] == [2, 2, 1]
+    assert chunks[0].turns[0].content == "t0"
+
+
+def test_fastloop_config_hash_covers_new_dimensions():
+    from adaption_memory.overnight import fastloop_config_hash
+    base = fastloop_config_hash("qwen3-4b-zeroshot", "F1", "base")
+    assert base != fastloop_config_hash("qwen3-4b-zeroshot", "F1", "base",
+                                        emission="simple")
+    assert base != fastloop_config_hash("qwen3-4b-zeroshot", "F1", "base",
+                                        granularity="interaction")
+    assert base != fastloop_config_hash("qwen3-4b-zeroshot", "F1", "base",
+                                        local_thinking=True)
+    assert base != fastloop_config_hash("qwen3-4b-zeroshot", "F1",
+                                        "coverage-f1")
+
+
+def test_simple_emission_tolerates_malformed_updates(tmp_path):
+    raw = json.dumps({"records": [
+        {"type": "atomic", "content": "Rent is $900.", "updates": ""},
+        {"type": "atomic", "content": "Lease ends 2026-09-01.", "updates": "x"},
+    ]})
+    extractor, store = _make_extractor(tmp_path, "simple", raw)
+    result = extractor.extract(Session("s1", None, [
+        Turn("user", "Rent is $900. Lease ends 2026-09-01."),
+    ]))
+    assert {record.content for record in result.records} == \
+        {"Rent is $900.", "Lease ends 2026-09-01."}
+    assert all(record.supersedes_id is None for record in result.records)
+    store.close()

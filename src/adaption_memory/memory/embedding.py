@@ -8,6 +8,21 @@ import numpy as np
 from fastembed import TextEmbedding
 
 
+def _cached_model_path() -> str | None:
+    """Resolve fastembed's ONNX snapshot from the local Hugging Face cache.
+
+    fastembed revalidates the model revision over the network on every
+    process start; on networks that block huggingface.co that call is a
+    connection reset even though the weights are fully cached. Passing the
+    cached snapshot path skips every network touch."""
+    try:
+        from huggingface_hub import snapshot_download
+        return snapshot_download("qdrant/bge-small-en-v1.5-onnx-q",
+                                 local_files_only=True)
+    except Exception:
+        return None
+
+
 class LocalEmbedder:
     model_name = "BAAI/bge-small-en-v1.5"
 
@@ -23,6 +38,7 @@ class LocalEmbedder:
                 model_name=self.model_name,
                 threads=1,
                 providers=["CPUExecutionProvider"],
+                specific_model_path=_cached_model_path(),
             )
         return self._model
 

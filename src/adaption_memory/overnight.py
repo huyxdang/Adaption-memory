@@ -29,7 +29,10 @@ from adaption_memory.memory.extract import (LOCAL_INFERENCE_REVISION,
                                              LOCAL_OUTPUT_INSTRUCTION)
 from adaption_memory.memory.checkpoint import stable_hash
 from adaption_memory.memory.judge import MemoryJudge
-from adaption_memory.memory.prompts import fewshot_messages, production_prompt
+from adaption_memory.memory.prompts import (LINES_EMISSION_INSTRUCTION,
+                                             SIMPLE_EMISSION_INSTRUCTION,
+                                             fewshot_messages,
+                                             production_prompt)
 from adaption_memory.memory.report import build_report
 from adaption_memory.memory.sft import build_sft
 from adaption_memory.memory.system import WriteTimeMemorySystem
@@ -43,12 +46,20 @@ ARMS = {
         "model": "qwen3:4b", "base_url": "http://127.0.0.1:11434/v1",
         "fewshot": False, "structured_output": "json-schema",
     },
+    "qwen3-1.7b-zeroshot": {
+        "model": "qwen3:1.7b", "base_url": "http://127.0.0.1:11434/v1",
+        "fewshot": False, "structured_output": "json-schema",
+    },
     "qwen3-4b-fewshot": {
         "model": "qwen3:4b", "base_url": "http://127.0.0.1:11434/v1",
         "fewshot": True, "structured_output": "json-schema",
     },
     "luna-target": {
         "model": "gpt-5.6-luna", "base_url": None,
+        "fewshot": True, "structured_output": "json-schema",
+    },
+    "sol-target": {
+        "model": "gpt-5.6-sol", "base_url": None,
         "fewshot": True, "structured_output": "json-schema",
     },
 }
@@ -150,14 +161,15 @@ def safe_name(value: str) -> str:
 
 
 def make_llm(model: str, *, base_url: str | None, tracker: SpendTracker,
-             max_tokens: int, structured_output: str = "json-schema") -> LLM:
+             max_tokens: int, structured_output: str = "json-schema",
+             reasoning_effort: str | None = "none") -> LLM:
     return LLM(
         model=model, base_url=base_url,
         api_key=(os.getenv("OPENAI_API_KEY") if base_url is None else "ollama"),
         max_tokens=max_tokens,
-        # Ollama's OpenAI-compatible endpoint maps this field to Qwen's
-        # native `think: false`, preventing reasoning-only empty responses.
-        reasoning_effort="none",
+        # Ollama's OpenAI-compatible endpoint maps "none" to Qwen's native
+        # `think: false`; None omits the field and leaves thinking on.
+        reasoning_effort=reasoning_effort,
         structured_output=structured_output,
         before_call=tracker.before_call,
         on_call=tracker.on_call,
@@ -254,6 +266,22 @@ def selected_question_ids(tier: str, benchmark: str,
 
 def normalized(text: str) -> str:
     return " ".join(locomo.normalize_answer(str(text)).split())
+
+
+def keyword_coverage(reference: str, category: str,
+                     memory_text: str) -> float | None:
+    """Paraphrase-tolerant recall: the fraction of the reference's
+    substantive words present in the memory text. The strict substring
+    proxy misses stored-but-reworded facts (e.g. "tattoos of her dogs" vs
+    gold "Tattoos of her four dogs"), so this is the primary fastloop
+    score; the strict proxy is kept as a secondary."""
+    if category in {"adversarial", "abstention"} or not reference.strip():
+        return None
+    text = normalized(memory_text)
+    words = [word for word in normalized(reference).split() if len(word) > 3]
+    if not words:
+        return None
+    return sum(word in text for word in words) / len(words)
 
 
 def recall_proxy(reference: str, category: str, memory_text: str) -> bool | None:
@@ -618,15 +646,24 @@ class _NoAnswerLLM:
         )
 
 
-def fastloop_config_hash(arm: str, format_name: str,
-                         prompt_revision: str) -> str:
+def fastloop_config_hash(arm: str, format_name: str, prompt_revision: str,
+                         emission: str = "pointer",
+                         granularity: str = "session",
+                         local_thinking: bool = False) -> str:
     """Fingerprint everything that shapes extractor output, so an edited
     prompt or few-shot file lands in a fresh directory with fresh stores."""
     arm_config = ARMS[arm]
     local = arm_config["model"].startswith("qwen3")
+    fewshot = arm_config["fewshot"] and emission == "pointer"
     system_prompt = production_prompt(format_name, prompt_revision)
+    if emission == "simple":
+        system_prompt += SIMPLE_EMISSION_INSTRUCTION
+    elif emission == "lines":
+        system_prompt += LINES_EMISSION_INSTRUCTION
     if local:
-        system_prompt = "/no_think\n" + system_prompt + LOCAL_OUTPUT_INSTRUCTION
+        prefix = "" if local_thinking else "/no_think\n"
+        suffix = LOCAL_OUTPUT_INSTRUCTION if emission == "pointer" else ""
+        system_prompt = prefix + system_prompt + suffix
     return stable_hash({
         "schema": 2,  # v2: per-conversation checkpoint files
         "arm": arm,
@@ -634,17 +671,34 @@ def fastloop_config_hash(arm: str, format_name: str,
         "structured_output": arm_config["structured_output"],
         "format": format_name,
         "prompt_revision": prompt_revision,
-        "fewshot": arm_config["fewshot"],
+        "emission": emission,
+        "granularity": granularity,
+        "thinking": local_thinking,
+        "fewshot": fewshot,
         "system": system_prompt,
         "fewshot_messages": (fewshot_messages(format_name, compact=local)
-                             if arm_config["fewshot"] else []),
+                             if fewshot else []),
         "local_bounds": ([LOCAL_INFERENCE_REVISION, LOCAL_MAX_RECORDS,
                           LOCAL_MAX_TOKENS] if local else None),
     })[:12]
 
 
+def interaction_chunks(session: Session) -> list[Session]:
+    """Split one session into consecutive turn pairs for per-interaction
+    extraction. The store still accumulates in order across chunks."""
+    chunks = []
+    for start in range(0, len(session.turns), 2):
+        turns = session.turns[start:start + 2]
+        chunks.append(Session(
+            session_id=f"{session.session_id}#i{start // 2}",
+            date=session.date, turns=turns,
+        ))
+    return chunks
+
+
 def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
-                 prompt_revision: str = "base",
+                 prompt_revision: str = "base", emission: str = "pointer",
+                 granularity: str = "session", local_thinking: bool = False,
                  benchmarks: tuple[str, ...] = BENCHMARKS,
                  limit: int | None = None, workers: int = 3) -> dict:
     """Extraction-recall inner loop on the smoke tier.
@@ -666,7 +720,10 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
     arm_config = ARMS[arm]
-    config_hash = fastloop_config_hash(arm, format_name, prompt_revision)
+    config_hash = fastloop_config_hash(
+        arm, format_name, prompt_revision, emission=emission,
+        granularity=granularity, local_thinking=local_thinking,
+    )
     run_root = (RESULTS / "fastloop" / arm
                 / f"{format_name}-{prompt_revision}-{config_hash}")
     started = time.perf_counter()
@@ -676,19 +733,25 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
         checkpoint_dir = benchmark_dir / "ckpt" / safe_name(conversation.id)
         extractor_llm = make_llm(
             arm_config["model"], base_url=arm_config["base_url"],
-            tracker=tracker, max_tokens=1400,
+            tracker=tracker, max_tokens=2048 if local_thinking else 1400,
             structured_output=arm_config["structured_output"],
+            reasoning_effort=None if local_thinking else "none",
         )
         system = WriteTimeMemorySystem(
             extractor_llm=extractor_llm, answer_llm=_NoAnswerLLM(),
             store_path=(benchmark_dir / "stores"
                         / f"{safe_name(conversation.id)}.sqlite3"),
             checkpoint_dir=checkpoint_dir,
-            arm=arm, fewshot=arm_config["fewshot"],
+            arm=arm,
+            fewshot=arm_config["fewshot"] and emission == "pointer",
             format_name=format_name, prompt_revision=prompt_revision,
+            emission=emission, local_thinking=local_thinking,
         )
+        sessions = (conversation.sessions if granularity == "session"
+                    else [chunk for session in conversation.sessions
+                          for chunk in interaction_chunks(session)])
         before_ingest = system.usage()
-        for session in conversation.sessions:
+        for session in sessions:
             system.ingest(session)
         usage = usage_delta(before_ingest, system.usage())
         rows, misses = [], []
@@ -699,6 +762,9 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
             stored = recall_proxy(
                 question.reference, question.category, memory_text
             )
+            stored_coverage = keyword_coverage(
+                question.reference, question.category, memory_text
+            )
             retrieved_items = system.retriever.retrieve(question.text)
             system.last_retrieved = retrieved_items
             retrieved_text = "\n".join(
@@ -707,20 +773,31 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
             retrieved = recall_proxy(
                 question.reference, question.category, retrieved_text
             )
+            retrieved_coverage = keyword_coverage(
+                question.reference, question.category, retrieved_text
+            )
             rows.append({
                 "stored": stored,
+                "stored_coverage": stored_coverage,
                 "retrieved": retrieved,
+                "retrieved_coverage": retrieved_coverage,
                 "supersession": supersession_rank_ok(
                     system, question.category
                 ),
             })
-            if stored is False or (stored and retrieved is False):
+            if stored_coverage is not None and stored_coverage < 0.999:
                 misses.append({
                     "question_id": question.id,
                     "conversation_id": conversation.id,
                     "category": question.category,
-                    "bucket": ("fact_not_extracted" if stored is False
-                               else "stored_not_retrieved"),
+                    "bucket": ("fact_not_extracted"
+                               if stored_coverage < 0.6
+                               else "partially_extracted"),
+                    "stored_coverage": round(stored_coverage, 3),
+                    "retrieved_coverage": (
+                        round(retrieved_coverage, 3)
+                        if retrieved_coverage is not None else None
+                    ),
                     "question": question.text,
                     "reference": question.reference,
                     "retrieved_ids": [item.record.id
@@ -747,7 +824,9 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
         ))
 
     overall = {"tier": "smoke", "arm": arm, "format": format_name,
-               "prompt_revision": prompt_revision, "config_hash": config_hash,
+               "prompt_revision": prompt_revision, "emission": emission,
+               "granularity": granularity, "local_thinking": local_thinking,
+               "config_hash": config_hash,
                "run_dir": (str(run_root.relative_to(ROOT))
                            if run_root.is_relative_to(ROOT)
                            else str(run_root)),
@@ -768,14 +847,30 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
             usage = add_usage(usage, outcome["usage"])
         stored_values = [row["stored"] for row in rows
                          if row["stored"] is not None]
+        stored_coverage_values = [row["stored_coverage"] for row in rows
+                                  if row["stored_coverage"] is not None]
         retrieved_values = [row["retrieved"] for row in rows
                             if row["retrieved"] is not None]
+        retrieved_coverage_values = [
+            row["retrieved_coverage"] for row in rows
+            if row["retrieved_coverage"] is not None
+        ]
         supersession_values = [row["supersession"] for row in rows
                                if row["supersession"] is not None]
         summary = {
             "benchmark": benchmark,
             "conversations": len(chunk),
             "questions": len(rows),
+            "store_coverage": (
+                round(sum(stored_coverage_values)
+                      / len(stored_coverage_values), 4)
+                if stored_coverage_values else None
+            ),
+            "retrieved_coverage": (
+                round(sum(retrieved_coverage_values)
+                      / len(retrieved_coverage_values), 4)
+                if retrieved_coverage_values else None
+            ),
             "store_recall": (round(sum(stored_values) / len(stored_values), 4)
                              if stored_values else None),
             "retrieved_recall": (
@@ -797,8 +892,8 @@ def run_fastloop(*, arm: str, tracker: SpendTracker, format_name: str = "F1",
                 "fact_not_extracted": sum(
                     miss["bucket"] == "fact_not_extracted" for miss in misses
                 ),
-                "stored_not_retrieved": sum(
-                    miss["bucket"] == "stored_not_retrieved" for miss in misses
+                "partially_extracted": sum(
+                    miss["bucket"] == "partially_extracted" for miss in misses
                 ),
             },
             "extractor_usage": usage,
@@ -846,13 +941,23 @@ def main() -> None:
     fast_parser.add_argument("--format", default="F1",
                              choices=["F1", "F2", "F3", "F4"])
     fast_parser.add_argument("--extractor-prompt", default="base",
-                             choices=["base", "coverage", "validated"])
+                             choices=["base", "coverage", "validated",
+                                      "coverage-f1"])
+    fast_parser.add_argument("--emission", default="pointer",
+                             choices=["pointer", "simple", "lines"])
+    fast_parser.add_argument("--granularity", default="session",
+                             choices=["session", "interaction"])
+    fast_parser.add_argument("--local-thinking", action="store_true")
     fast_parser.add_argument("--benchmark", action="append", choices=BENCHMARKS)
     fast_parser.add_argument("--limit", type=int, default=None,
                              help="cap conversations per benchmark")
     fast_parser.add_argument("--workers", type=int, default=3,
                              help="concurrent conversations (sessions within "
                                   "a conversation stay sequential)")
+    subparsers.add_parser(
+        "fastloop-report",
+        help="build results/fastloop/report.html from the newest run per arm",
+    )
     subparsers.add_parser("rescore-baselines")
     sft_parser = subparsers.add_parser("build-sft")
     sft_parser.add_argument("--format", default="F1",
@@ -878,7 +983,12 @@ def main() -> None:
                 prompt_revision=args.extractor_prompt,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
                 limit=args.limit, workers=args.workers,
+                emission=args.emission, granularity=args.granularity,
+                local_thinking=args.local_thinking,
             )
+        elif args.command == "fastloop-report":
+            from adaption_memory.memory.fastloop_report import build_fastloop_report
+            output = {"report": str(build_fastloop_report(RESULTS / "fastloop"))}
         elif args.command == "rescore-baselines":
             output = rescore_baselines(tracker)
         elif args.command == "build-sft":
