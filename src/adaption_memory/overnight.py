@@ -39,19 +39,22 @@ from adaption_memory.memory.system import WriteTimeMemorySystem
 
 
 ROOT = Path(__file__).resolve().parents[2]
+# Overridable so independent runs can target separate local servers
+# (e.g. a second process-local `ollama serve`) for parallel decode queues.
+LOCAL_QWEN_URL = os.getenv("LOCAL_QWEN_BASE_URL", "http://127.0.0.1:11434/v1")
 DATA = ROOT / "data" / "mini"
 RESULTS = ROOT / "results"
 ARMS = {
     "qwen3-4b-zeroshot": {
-        "model": "qwen3:4b", "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen3:4b", "base_url": LOCAL_QWEN_URL,
         "fewshot": False, "structured_output": "json-schema",
     },
     "qwen3-1.7b-zeroshot": {
-        "model": "qwen3:1.7b", "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen3:1.7b", "base_url": LOCAL_QWEN_URL,
         "fewshot": False, "structured_output": "json-schema",
     },
     "qwen3-4b-fewshot": {
-        "model": "qwen3:4b", "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen3:4b", "base_url": LOCAL_QWEN_URL,
         "fewshot": True, "structured_output": "json-schema",
     },
     "luna-target": {
