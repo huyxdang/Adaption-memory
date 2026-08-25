@@ -318,6 +318,7 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             format_name: str = "F1", split_name: str | None = None,
             prompt_revision: str = "base", emission: str = "pointer",
             workers: int = 3, extract_only: bool = False,
+            answer_revision: str = "base", run_suffix: str = "",
             retrieval_k: int = 12, dense_weight: float = 1.0,
             bm25_weight: float = 1.0, demotion_factor: float = 0.3,
             benchmarks: tuple[str, ...] = BENCHMARKS) -> dict:
@@ -325,12 +326,13 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
         raise ValueError("full tier is intentionally unsupported")
     if arm not in ARMS:
         raise ValueError(f"unknown arm: {arm}")
-    if prompt_revision not in {"base", "coverage", "validated", "coverage-f1"}:
+    if prompt_revision not in {"base", "coverage", "validated", "coverage-f1",
+                               "coverage-f1-v2"}:
         raise ValueError(f"unknown extractor prompt: {prompt_revision}")
     if prompt_revision in {"coverage", "validated"} and format_name != "F4":
         raise ValueError("optimized prompts are defined only for F4")
-    if prompt_revision == "coverage-f1" and format_name != "F1":
-        raise ValueError("coverage-f1 is defined only for F1")
+    if prompt_revision.startswith("coverage-f1") and format_name != "F1":
+        raise ValueError("coverage-f1 prompts are defined only for F1")
     if emission not in {"pointer", "simple", "replaces"}:
         raise ValueError(
             "run_arm supports the pointer, simple, and replaces emissions")
@@ -340,10 +342,16 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
         run_name = f"{run_name}-{prompt_revision}"
     if emission != "pointer":
         run_name = f"{run_name}-{emission}"
+    if answer_revision != "base":
+        run_name = f"{run_name}-ans-{answer_revision}"
+    if retrieval_k != 12:
+        run_name = f"{run_name}-k{retrieval_k}"
+    if run_suffix:
+        run_name = f"{run_name}-{run_suffix}"
     run_root = RESULTS / "overnight" / tier / arm / run_name
     overall = {"tier": tier, "arm": arm, "format": format_name,
                "split": split_name, "prompt_revision": prompt_revision,
-               "emission": emission,
+               "emission": emission, "answer_revision": answer_revision,
                "inference": {
                    "revision": (
                        LOCAL_INFERENCE_REVISION
@@ -388,6 +396,7 @@ def run_arm(*, tier: str, arm: str, tracker: SpendTracker,
             fewshot=arm_config["fewshot"] and emission == "pointer",
             format_name=format_name,
             prompt_revision=prompt_revision, emission=emission,
+            answer_revision=answer_revision,
             retrieval_k=retrieval_k, dense_weight=dense_weight,
             bm25_weight=bm25_weight, demotion_factor=demotion_factor,
         )
@@ -982,10 +991,16 @@ def main() -> None:
     run_parser.add_argument("--split", choices=["dev", "holdout"])
     run_parser.add_argument("--extractor-prompt", default="base",
                             choices=["base", "coverage", "validated",
-                                     "coverage-f1"])
+                                     "coverage-f1", "coverage-f1-v2"])
     run_parser.add_argument("--emission", default="pointer",
                             choices=["pointer", "simple", "replaces"])
     run_parser.add_argument("--workers", type=int, default=3)
+    run_parser.add_argument("--answer-prompt", default="base",
+                            choices=["base", "type-aware", "chrono"])
+    run_parser.add_argument("--retrieval-k", type=int, default=12)
+    run_parser.add_argument("--run-suffix", default="",
+                            help="isolate a rerun of identical params in its "
+                                 "own directory (e.g. r2 for variance checks)")
     run_parser.add_argument("--extract-only", action="store_true",
                             help="run the local write path only; skip hosted "
                                  "answering and judging (no summary values)")
@@ -999,7 +1014,7 @@ def main() -> None:
                              choices=["F1", "F2", "F3", "F4"])
     fast_parser.add_argument("--extractor-prompt", default="base",
                              choices=["base", "coverage", "validated",
-                                      "coverage-f1"])
+                                      "coverage-f1", "coverage-f1-v2"])
     fast_parser.add_argument("--emission", default="pointer",
                              choices=["pointer", "simple", "lines",
                                       "replaces"])
@@ -1035,6 +1050,9 @@ def main() -> None:
                 prompt_revision=args.extractor_prompt,
                 emission=args.emission, workers=args.workers,
                 extract_only=args.extract_only,
+                answer_revision=args.answer_prompt,
+                run_suffix=args.run_suffix,
+                retrieval_k=args.retrieval_k,
                 benchmarks=tuple(args.benchmark or BENCHMARKS),
             )
         elif args.command == "fastloop":

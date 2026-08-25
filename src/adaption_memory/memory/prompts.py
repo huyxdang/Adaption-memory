@@ -99,6 +99,19 @@ record with that exact candidate id as supersedes_id. Never invent a
 supersedes id. Do not infer unsupported facts.
 """
 
+COVERAGE_F1_V2_PROMPT = COVERAGE_F1_PROMPT + """
+Value discipline:
+- Every specific value stated in the session — a time, date, URL, address,
+  product or place name, price, quantity, duration, or identifier — must
+  appear verbatim inside some atomic record, attached to the fact it
+  qualifies. If a sentence contains two independent values, write two
+  records rather than dropping one.
+- Record concrete events with their stated date or time and, when the
+  session gives one, their order relative to other events.
+- These records are the only memory of the session; a value not written
+  here is lost. Prefer writing a small extra record over omitting a value.
+"""
+
 SIMPLE_EMISSION_INSTRUCTION = """
 
 Output format override — numbered updates:
@@ -143,12 +156,14 @@ content remains a string.
 
 def production_prompt(format_name: str = "F1",
                       prompt_revision: str = "base") -> str:
-    if prompt_revision not in {"base", "coverage", "validated", "coverage-f1"}:
+    if prompt_revision not in {"base", "coverage", "validated", "coverage-f1",
+                               "coverage-f1-v2"}:
         raise ValueError(f"unknown extractor prompt: {prompt_revision}")
-    if prompt_revision == "coverage-f1":
+    if prompt_revision in {"coverage-f1", "coverage-f1-v2"}:
         if format_name != "F1":
-            raise ValueError("coverage-f1 is defined only for F1")
-        return COVERAGE_F1_PROMPT
+            raise ValueError(f"{prompt_revision} is defined only for F1")
+        return (COVERAGE_F1_V2_PROMPT if prompt_revision.endswith("v2")
+                else COVERAGE_F1_PROMPT)
     if prompt_revision in {"coverage", "validated"}:
         if format_name != "F4":
             raise ValueError("optimized prompts are defined only for F4")

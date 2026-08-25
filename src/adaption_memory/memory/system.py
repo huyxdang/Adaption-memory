@@ -18,7 +18,7 @@ class WriteTimeMemorySystem:
                  store_path: str | Path, checkpoint_dir: str | Path,
                  arm: str, fewshot: bool, format_name: str = "F1",
                  prompt_revision: str = "base", emission: str = "pointer",
-                 local_thinking: bool = False,
+                 local_thinking: bool = False, answer_revision: str = "base",
                  retrieval_k: int = 12, dense_weight: float = 1.0,
                  bm25_weight: float = 1.0, demotion_factor: float = 0.3):
         checkpoint_dir = Path(checkpoint_dir)
@@ -42,7 +42,7 @@ class WriteTimeMemorySystem:
         )
         self.answerer = MemoryAnswerer(
             answer_llm, checkpoint_dir / "answer_calls.jsonl", arm,
-            format_name=format_name,
+            format_name=format_name, answer_revision=answer_revision,
         )
         self.extractions: list[ExtractionResult] = []
         self.last_retrieved: list[Retrieved] = []
